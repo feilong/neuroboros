@@ -189,7 +189,6 @@ class Dataset:
 
         if fp_version is None:
             fp_version = self.fp_version
-
         if lr in ["l", "r"]:
             lr = f"{lr}-cerebrum"
 
