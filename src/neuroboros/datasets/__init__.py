@@ -786,6 +786,7 @@ class Raiders(Dataset):
                 basename = f"sub-{sid}_ses-actions1_task-actions"
             elif run in [5, 6, 7, 8]:
                 basename = f"sub-{sid}_ses-actions2_task-actions"
+                run -=4
         else:
             raise ValueError(f"Task {task} not recognized.")
         if suffix == ".npy":
