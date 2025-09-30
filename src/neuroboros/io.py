@@ -1,8 +1,9 @@
 import os
 import warnings
+from glob import glob
 
 import requests
-from glob import glob
+
 try:
     import datalad.api as dl
 except ImportError:
@@ -74,9 +75,11 @@ class DatasetManager:
         else:
             local_fn = os.path.join(self.root, fn)
 
-        if '*' in local_fn:
+        if "*" in local_fn:
             fns = glob(local_fn)
-            assert len(fns)==1,f"Expecting exactly 1 file, found {len(fns)} files matching: {local_fn}."
+            assert (
+                len(fns) == 1
+            ), f"Expecting exactly 1 file, found {len(fns)} files matching: {local_fn}."
             local_fn = fns[0]
 
         if not os.path.exists(local_fn):
