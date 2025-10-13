@@ -261,7 +261,13 @@ class Dataset:
         if fp_version is None:
             fp_version = self.fp_version
         suffix = "design.json"
-        if self.renaming is None:
+        if self.rename_func is not None:
+            fn = [
+                fp_version,
+                "design",
+                self.rename_func(sid, task, run, "_" + suffix),
+            ]
+        elif self.renaming is None:
             fn = [
                 fp_version,
                 "design",
