@@ -5,7 +5,7 @@ from sklearn.decomposition import PCA
 from sklearn.utils.extmath import randomized_svd
 
 from ..linalg import safe_svd
-from hyperalignment.procrustes import procrustes
+from .procrustes import procrustes
 
 
 def PCA_decomposition(

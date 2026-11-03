@@ -4,9 +4,9 @@ import numpy as np
 import scipy.sparse as sparse
 from joblib import Parallel, delayed
 
-from hyperalignment.local_template import compute_template
-from hyperalignment.procrustes import procrustes
-from hyperalignment.ridge import ridge
+from .local_template import compute_template
+from .procrustes import procrustes
+from .ridge import ridge
 
 
 def compute_searchlight_weights(sls, dists=None, radius=None, return_sparse=False):

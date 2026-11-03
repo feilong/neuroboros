@@ -1,7 +1,7 @@
 import os
 from glob import glob
 
-from hyperalignment.procrustes import procrustes
+from ..ha.procrustes import procrustes
 
 from ..spaces import get_geometry
 from .__init__ import Sphere, Surface
