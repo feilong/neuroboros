@@ -81,28 +81,21 @@ quartodoc:
       desc: >
         Preprocessed fMRI datasets. Each class downloads what it needs on
         first use and returns data matrices in a chosen brain space.
+      # Forrest and Life are hosted on GIN (https://gin.g-node.org/neuroboros).
+      # The datasets after them are available to other researchers, some only
+      # under a data use agreement, and are not released on GIN yet. The
+      # remaining Dataset classes in the package are private and not documented.
       contents:
         - dataset
         - Forrest
         - Life
         - Budapest
-        - Raiders
-        - Bologna
-        - Bellaria
-        - Dalmatians
         - SpaceTop
         - CamCAN
         - ID1000
         - HCA
-        - MonkeyKingdom
-        - MonkeyKingdomEng
-        - MonkeyAction
-        - HBNSSI
-        - WhiplashC1
-        - WhiplashC2
-        - WhiplashC3
         - IBC
-        - Hybr
+        - HBNSSI
     - title: Spaces and templates
       desc: >
         Geometry, masks, parcellations, morphometry, and mappings for the
