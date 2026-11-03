@@ -3,3 +3,24 @@ pre:not(.sourceCode) > code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Materia gives the navbar 1rem of vertical padding, which makes it ~92px
+   tall. Same trim as the lab website: only the whitespace around the brand
+   and the links is reduced; the text is untouched. */
+.navbar {
+  --bs-navbar-padding-y: 0.47rem;
+  --bs-navbar-brand-padding-y: 0;
+}
+
+/* Quarto sets `.navbar-nav .nav-link { padding: .5em }` directly, which
+   overrides the Bootstrap variable, so set the property itself. */
+.navbar-nav .nav-link {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Hold the bar to one height whether the links are in a row or folded into
+   the toggler, so the body offset Quarto derives from it does not jump. */
+.navbar > .navbar-container.container-fluid {
+  min-height: 44px;
+}
