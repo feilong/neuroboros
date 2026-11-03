@@ -7,6 +7,7 @@ from joblib import Parallel, delayed
 from .local_template import compute_template
 from .procrustes import procrustes
 from .ridge import ridge
+from .sparse import csc_block_offsets
 
 
 def compute_searchlight_weights(sls, dists=None, radius=None, return_sparse=False):
@@ -116,17 +117,32 @@ def searchlight_hyperalignment(
     """
     if sls_Y is None:
         sls_Y = sls
+    if weights is None:
+        weights = [None] * len(sls)
 
-    mat = np.zeros((X.shape[1], Y.shape[1])) if mat0 is None else mat0.copy()
+    if mat0 is None:
+        mat = np.zeros((X.shape[1], Y.shape[1]))
 
-    if weights is not None:
-        for sl_X, sl_Y, w in zip(sls, sls_Y, weights):
-            t = sl_func(X[:, sl_X], Y[:, sl_Y])
-            mat[np.ix_(sl_X, sl_Y)] += t * w[np.newaxis]
-    else:
-        for sl_X, sl_Y in zip(sls, sls_Y):
-            t = sl_func(X[:, sl_X], Y[:, sl_Y])
+        def add_block(sl_X, sl_Y, t):
             mat[np.ix_(sl_X, sl_Y)] += t
+
+    else:
+        # Write directly into the ``data`` array of the preallocated CSC
+        # matrix. Indexing the sparse matrix itself is far slower, because
+        # scipy validates the entire matrix on every write.
+        mat = mat0.tocsc(copy=True)
+        mat.sum_duplicates()
+        indptr, indices, data = mat.indptr, mat.indices, mat.data
+
+        def add_block(sl_X, sl_Y, t):
+            offsets = csc_block_offsets(indptr, indices, sl_X, sl_Y)
+            data[offsets] += t.T.ravel()
+
+    for sl_X, sl_Y, w in zip(sls, sls_Y, weights):
+        t = sl_func(X[:, sl_X], Y[:, sl_Y])
+        if w is not None:
+            t = t * w[np.newaxis]
+        add_block(sl_X, sl_Y, t)
     return mat
 
 
