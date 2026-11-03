@@ -8,7 +8,7 @@ The template itself, and `nb.tpl`, are described in [HyperBrain functional templ
 
 The example aligns two participants in the [Forrest](../reference/Forrest.qmd) dataset, in which participants watched the movie *Forrest Gump* over 8 runs.
 Runs 1–4 are used to estimate the transformations, and runs 5–8 to evaluate them with inter-subject correlation (ISC).
-The hyperalignment algorithms come from the separate [`hyperalignment`](https://pypi.org/project/hyperalignment/) package (see [Installation](installation.qmd#optional-packages)).
+The hyperalignment algorithms come from the separate [`hyperalignment`](https://github.com/feilong/hyperalignment) package (see [Installation](installation.qmd#optional-packages)).
 
 ## Overview
 

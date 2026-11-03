@@ -8,7 +8,7 @@ toc: false
 It provides preprocessed datasets that download on demand, brain templates and searchlights, and tools for common analyses such as GLM, inter-subject correlation, and surface plotting.
 
 ```bash
-pip install -U neuroboros
+pip install git+https://github.com/neuroboros/neuroboros.git
 ```
 
 ```python

@@ -2,24 +2,24 @@
 title: "Installation"
 ---
 
-## Install with pip
+## Install from GitHub
 
-`neuroboros` is a pure Python package on [PyPI](https://pypi.org/project/neuroboros/).
-Install or upgrade it with pip:
+`neuroboros` is under active development, so install the latest version directly from the [GitHub repository](https://github.com/neuroboros/neuroboros):
 
 ```bash
-pip install -U neuroboros
+pip install git+https://github.com/neuroboros/neuroboros.git
 ```
 
+Run the same command again to upgrade to the latest version.
 It depends on NumPy, SciPy, nibabel, pandas, matplotlib, joblib, Pillow, and requests, which pip installs automatically.
 Python 3.8 or newer is recommended.
 
 ## Optional packages
 
-Hyperalignment analyses use the separate [`hyperalignment`](https://pypi.org/project/hyperalignment/) package:
+Hyperalignment analyses use the separate [`hyperalignment`](https://github.com/feilong/hyperalignment) package, also installed from GitHub:
 
 ```bash
-pip install -U hyperalignment
+pip install git+https://github.com/feilong/hyperalignment.git
 ```
 
 ## Check the installation
