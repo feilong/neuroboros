@@ -1,7 +1,7 @@
 import numpy as np
 from datetime import datetime
 
-from hyperalignment.linalg import safe_svd
+from ..linalg import safe_svd
 
 
 def ridge(X, Y, alpha):

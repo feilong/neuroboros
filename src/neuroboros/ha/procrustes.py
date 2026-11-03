@@ -1,6 +1,6 @@
 import numpy as np
 
-from hyperalignment.linalg import safe_svd
+from ..linalg import safe_svd
 
 
 def procrustes(X, Y, reflection=True, scaling=False):

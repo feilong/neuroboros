@@ -4,7 +4,7 @@ from scipy.stats import zscore
 from sklearn.decomposition import PCA
 from sklearn.utils.extmath import randomized_svd
 
-from hyperalignment.linalg import safe_svd
+from ..linalg import safe_svd
 from hyperalignment.procrustes import procrustes
 
 
@@ -251,7 +251,7 @@ def compute_template(
 if __name__ == "__main__":
     from scipy.stats import zscore
 
-    from hyperalignment.linalg import svd_pca
+    from ..linalg.base import svd_pca
 
     rng = np.random.default_rng(0)
     dss = rng.standard_normal((1, 200, 100))

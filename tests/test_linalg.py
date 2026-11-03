@@ -1,7 +1,8 @@
 import numpy as np
 import scipy.linalg as linalg
 from sklearn.decomposition import PCA
-from hyperalignment.linalg import safe_svd, svd_pca
+from neuroboros.linalg import safe_svd
+from neuroboros.linalg.base import svd_pca
 
 
 class TestSafeSVD:

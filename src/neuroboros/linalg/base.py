@@ -52,15 +52,24 @@ def svd_pca(X):
     """
     Principal component analysis (PCA) based on SVD.
 
+    This function performs a rotation and returns the transformed data in
+    PC space. Therefore, its behavior is similar to the ``fit_transform``
+    method of ``sklearn.decomposition.PCA``.
+
+    It does not throw away any PCs, and therefore there is no
+    dimensionality reduction in the PC space. The number of PCs is
+    ``min(N, M)``, including those with zero singular values.
+
     Parameters
     ----------
     X : ndarray of shape (N, M)
-        Input matrix. Column means are always removed before computing PCA.
+        The data matrix to be transformed into PC space. Column means are
+        always removed before computing PCA.
 
     Returns
     -------
     PCs : ndarray of shape (N, K)
-        The principal components, where ``K = min(N, M)``.
+        The transformed data matrix in PC space, where ``K = min(N, M)``.
     """
     U, s, _ = safe_svd(X, remove_mean=True)
     return U * s[np.newaxis]
