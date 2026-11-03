@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Citation style for the neuroboros documentation.
+
+  In-text citations are author-year: (Guntupalli et al., 2018).
+
+  Each reference is laid out in the three-line format of the lab website's
+  publication listing: the title, linked to the paper; the author list; and
+  the venue line (year, journal, volume(issue), pages). Each line is a
+  display="block" group, which citeproc renders as <div class="csl-block">,
+  styled in styles.css. The DOI itself is not printed, so citeproc links the
+  title to it instead.
+-->
+<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0"
+       demote-non-dropping-particle="never" page-range-format="expanded">
+  <info>
+    <title>neuroboros documentation</title>
+    <id>https://neuroboros.github.io/neuroboros.csl</id>
+    <updated>2026-11-02T00:00:00+00:00</updated>
+  </info>
+
+  <macro name="author-short">
+    <names variable="author">
+      <name form="short" and="text" delimiter=", "/>
+      <et-al term="et-al"/>
+    </names>
+  </macro>
+
+  <macro name="year">
+    <date variable="issued" form="text" date-parts="year"/>
+  </macro>
+
+  <citation et-al-min="3" et-al-use-first="1" disambiguate-add-year-suffix="true">
+    <sort>
+      <key macro="author-short"/>
+      <key macro="year"/>
+    </sort>
+    <layout prefix="(" suffix=")" delimiter="; ">
+      <group delimiter=", ">
+        <text macro="author-short"/>
+        <text macro="year"/>
+      </group>
+    </layout>
+  </citation>
+
+  <bibliography>
+    <sort>
+      <key macro="author-short"/>
+      <key macro="year"/>
+    </sort>
+    <layout>
+      <group display="block">
+        <text variable="title"/>
+      </group>
+      <group display="block">
+        <names variable="author">
+          <name delimiter=", "/>
+        </names>
+      </group>
+      <group display="block" delimiter=", ">
+        <text macro="year" font-weight="bold"/>
+        <text variable="container-title" font-style="italic" font-weight="bold"/>
+        <group>
+          <text variable="volume"/>
+          <text variable="issue" prefix="(" suffix=")"/>
+        </group>
+        <text variable="page"/>
+      </group>
+    </layout>
+  </bibliography>
+</style>

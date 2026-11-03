@@ -11,9 +11,21 @@ project:
   # that `quarto preview` does not re-render on every request.
   # Install the package with `pip install -e .[docs]` and render from this directory.
   pre-render: build_reference.py
+  resources:
+    - assets/fontawesome/**
 
 metadata-files:
   - reference/_sidebar.yml
+
+# Citations: [@key] in any page, with `## References` and a `::: {#refs}`
+# block at the end. The style lays references out as on the lab website.
+bibliography: references.bib
+csl: neuroboros.csl
+# references.lua runs citeproc itself and then marks up author roles and
+# paper types from references-meta.json, so citeproc is turned off here.
+citeproc: false
+filters:
+  - references.lua
 
 website:
   title: "neuroboros"

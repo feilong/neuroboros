@@ -1,3 +1,7 @@
+/* Font Awesome, vendored locally so the site does not depend on a CDN (the
+   same copy as the lab website). Used for the icons in the reference list. */
+@import "assets/fontawesome/css/all.min.css";
+
 /* Wrap long lines in plain output blocks (fenced blocks without a language). */
 pre:not(.sourceCode) > code {
   white-space: pre-wrap;
@@ -23,4 +27,94 @@ pre:not(.sourceCode) > code {
    the toggler, so the body offset Quarto derives from it does not jump. */
 .navbar > .navbar-container.container-fluid {
   min-height: 44px;
+}
+
+/* --- references, in the three-line format of the lab website's listing --- */
+
+/* neuroboros.csl renders each reference as three blocks: title, authors,
+   venue. The rules are scoped to .csl-entry rather than #refs so that they
+   also apply inside the citation hover popup, which copies the entry. */
+.csl-entry {
+  margin-bottom: 0.9rem;
+}
+/* Quarto gives the popup copy a hanging indent, which pulls the first line of
+   each block to the left of the rest. Blocks do not hang. */
+.tippy-content .csl-entry.hanging-indent {
+  margin-left: 0;
+  text-indent: 0;
+  margin-bottom: 0;
+}
+.csl-entry .csl-block:nth-child(1) { line-height: 1.35; margin-bottom: 0.1rem; }
+.csl-entry .csl-block:nth-child(2) {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin-bottom: 0.1rem;
+  color: #444;
+}
+.csl-entry .csl-block:nth-child(3) { font-size: 0.86rem; color: #696969; }
+/* the year is bold but upright; the journal beside it carries the italic */
+.csl-entry .csl-block:nth-child(3) strong { color: #444; }
+/* titles are plainly linked, as on the lab website's listing */
+.csl-entry .csl-block:nth-child(1) a { text-decoration: none; }
+.csl-entry .csl-block:nth-child(1) a:hover { text-decoration: underline; }
+
+/* "URL" link at the end of the venue line, as on the lab website. */
+.csl-entry .pub-link { margin-left: 0.6rem; white-space: nowrap; }
+
+/* Author roles, marked up by references.lua: every key role reads the same,
+   bold. The roles are named in the tooltip. */
+.au-first,
+.au-senior,
+.au-corr-name { font-weight: 700; }
+.au[title] { cursor: help; }
+/* a name and its envelope stay on one line */
+.au { white-space: nowrap; }
+
+/* Envelope after each corresponding author, in the link colour. */
+.au-corr {
+  color: var(--bs-link-color);
+  font-weight: 400;
+  margin-left: 0.1em;
+}
+/* the glyph is already raised by <sup>; keep it small enough not to crowd
+   the name, and stop <sup>'s own shrink from compounding with the icon's */
+.au-corr .fa-envelope {
+  font-size: 0.82em;
+  vertical-align: baseline;
+}
+
+/* Paper-type icon in front of the venue line, with an instant tooltip. */
+.pub-cat {
+  margin-right: 0.4rem;
+  font-size: 0.82em;
+  opacity: 0.75;
+  vertical-align: 1px;
+}
+.pub-cat-empirical { color: #4a6fa5; }
+.pub-cat-review    { color: #7d6a9c; }
+.pub-cat-data      { color: #3f7d68; }
+.pub-cat[data-tip] { position: relative; cursor: help; }
+/* A pseudo-element cannot escape its parent's opacity, so go opaque on hover;
+   that doubles as hover feedback on the icon. */
+.pub-cat[data-tip]:hover { opacity: 1; }
+.pub-cat[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  /* left-aligned, not centred: the icon sits at the column's left edge */
+  left: 0;
+  bottom: calc(100% + 0.35rem);
+  white-space: nowrap;
+  /* the glyph comes from a Font Awesome face; restate the body font */
+  font-family: var(--bs-body-font-family, "Roboto", system-ui, sans-serif);
+  font-size: 0.78rem;
+  font-weight: 400;
+  font-style: normal;
+  color: #333;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 1080;
+  pointer-events: none;
 }

@@ -2,8 +2,8 @@
 title: "Connectivity hyperalignment using HyperBrain templates"
 ---
 
-Hyperalignment finds, for each participant, a transformation that brings their brain data into a common functional space.
-This page walks through connectivity hyperalignment (Guntupalli et al., 2018, PLOS Computational Biology), using functional connectivity profiles to align participants to the HyperBrain-Sparta template.
+Hyperalignment finds, for each participant, a transformation that brings their brain data into a common functional space [@haxby2020].
+This page walks through connectivity hyperalignment [@guntupalli2018], using functional connectivity profiles to align participants to the HyperBrain-Sparta template.
 The template itself, and `nb.tpl`, are described in [HyperBrain functional templates](templates.qmd).
 
 The example aligns two participants in the [Forrest](../reference/Forrest.qmd) dataset, in which participants watched the movie *Forrest Gump* over 8 runs.
@@ -244,3 +244,8 @@ Apply each to the corresponding hemisphere's data:
 dm_l = dset.get_data('01', 'forrest', test_runs, 'l', space='onavg-ico64')
 aligned_l = dm_l @ nb.load('xfm_01_lh.npz')
 ```
+
+## References
+
+::: {#refs}
+:::

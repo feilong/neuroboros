@@ -1,0 +1,19 @@
+{
+  "_comment": "Per citation key: paper type (empirical, review, data) and author roles in byline order (first, senior, corresponding; empty when none). Rendered into the reference list by references.lua.",
+  "haxby2020": {
+    "type": "review",
+    "authors": ["first corresponding", "", "", ""]
+  },
+  "guntupalli2018": {
+    "type": "empirical",
+    "authors": ["first", "", "senior corresponding"]
+  },
+  "feilong2023": {
+    "type": "empirical",
+    "authors": ["first corresponding", "", "", "", "", "senior corresponding"]
+  },
+  "jiahui2020": {
+    "type": "empirical",
+    "authors": ["first", "", "", "", "", "", "senior corresponding"]
+  }
+}

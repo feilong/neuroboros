@@ -6,11 +6,11 @@ When we perform hyperalignment, we often hyperalign each individual to a functio
 `nb.tpl` loads functional templates from the [`HyperBrain`](https://gin.g-node.org/neuroboros/hyperbrain) dataset.
 
 ::: {.column-margin}
-Alternatively, we can also hyperalign the template to an individual to model the individual's functional architecture (Feilong et al., 2023, Imaging Neuroscience), or hyperalign individuals to each other (Jiahui et al., 2020, NeuroImage).
+Alternatively, we can also hyperalign the template to an individual to model the individual's functional architecture [@feilong2023], or hyperalign individuals to each other [@jiahui2020].
 :::
 
 HyperBrain-Sparta is a functional connectivity template built from high-quality fMRI data from 300 individuals.
-It can be used to align brains using connectivity hyperalignment (Guntupalli et al., 2018, PLOS Computational Biology).
+It can be used to align brains using connectivity hyperalignment [@guntupalli2018].
 It is the default functional template.
 The files are downloaded on first use and cached locally.
 To use the template, you can simply run:
@@ -182,3 +182,8 @@ datalad clone https://gin.g-node.org/neuroboros/hyperbrain ~/.neuroboros-data/hy
 
 `neuroboros` detects the clone and fetches files with `datalad get`.
 `nb.tpl.update()` then updates the clone, including its manifest, with `datalad update`.
+
+## References
+
+::: {#refs}
+:::
