@@ -1,27 +1,25 @@
 import numpy as np
 from scipy.linalg import LinAlgError
 from scipy.stats import zscore
-from sklearn.decomposition import PCA
 from sklearn.utils.extmath import randomized_svd
 
 from ..linalg import safe_svd
 from .procrustes import procrustes
 
 
-def PCA_decomposition(
-    dss, max_npc=None, flavor="sklearn", adjust_ns=False, demean=True
-):
-    """Decompose concatenated data matrices using PCA/SVD.
+def PCA_decomposition(dss, max_npc=None, flavor="sklearn", adjust_ns=False):
+    """Decompose concatenated data matrices using SVD.
+
+    Column means are not removed before decomposition.
 
     Parameters
     ----------
     dss : ndarray of shape (ns, nt, nv)
     max_npc : integer or None
     flavor : {'sklearn', 'svd'}
+        'sklearn' uses randomized SVD, 'svd' uses full SVD.
     adjust_ns : bool
         Whether to adjust the variance of the output so that it doesn't increase with the number of subjects.
-    demean : bool
-        Whether to remove the mean of the columns prior to SVD.
 
     Returns
     -------
@@ -34,71 +32,46 @@ def PCA_decomposition(
         max_npc = min(max_npc, min(X.shape[0], X.shape[1]))
     if flavor == "sklearn":
         try:
-            if demean:
-                pca = PCA(n_components=max_npc, random_state=0)
-                XX = pca.fit_transform(X)
-                cc = pca.components_.reshape(-1, ns, nv)
-                if adjust_ns:
-                    XX /= np.sqrt(ns)
-                return XX, cc
-            else:
-                U, s, Vt = randomized_svd(
-                    X,
-                    (max_npc if max_npc is not None else min(X.shape)),
-                    random_state=0,
-                )
-                if adjust_ns:
-                    XX = U[:, :max_npc] * (s[np.newaxis, :max_npc] / np.sqrt(ns))
-                else:
-                    XX = U[:, :max_npc] * (s[np.newaxis, :max_npc])
-                cc = Vt[:max_npc].reshape(-1, ns, nv)
-                return XX, cc
-        except LinAlgError as e:
+            U, s, Vt = randomized_svd(
+                X,
+                (max_npc if max_npc is not None else min(X.shape)),
+                random_state=0,
+            )
+        except LinAlgError:
             return PCA_decomposition(
-                dss, max_npc=max_npc, flavor="svd", adjust_ns=adjust_ns, demean=demean
+                dss, max_npc=max_npc, flavor="svd", adjust_ns=adjust_ns
             )
     elif flavor == "svd":
-        U, s, Vt = safe_svd(X, demean=demean)
-        if adjust_ns:
-            XX = U[:, :max_npc] * (s[np.newaxis, :max_npc] / np.sqrt(ns))
-        else:
-            XX = U[:, :max_npc] * (s[np.newaxis, :max_npc])
-        cc = Vt[:max_npc].reshape(-1, ns, nv)
-        return XX, cc
+        U, s, Vt = safe_svd(X, remove_mean=False)
     else:
         raise NotImplementedError
+    XX = U[:, :max_npc] * s[np.newaxis, :max_npc]
+    if adjust_ns:
+        XX /= np.sqrt(ns)
+    cc = Vt[:max_npc].reshape(-1, ns, nv)
+    return XX, cc
 
 
-def compute_PCA_template(dss, sl=None, max_npc=None, flavor="sklearn", demean=True):
+def compute_PCA_template(dss, sl=None, max_npc=None, flavor="sklearn"):
     if sl is not None:
         dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(
-        dss, max_npc=max_npc, flavor=flavor, adjust_ns=True, demean=demean
-    )
+    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=True)
     return XX
 
 
-def compute_PCA_var1_template(
-    dss, sl=None, max_npc=None, flavor="sklearn", demean=True
-):
+def compute_PCA_var1_template(dss, sl=None, max_npc=None, flavor="sklearn"):
     if sl is not None:
         dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(
-        dss, max_npc=max_npc, flavor=flavor, adjust_ns=False, demean=demean
-    )
+    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=False)
     w = np.sqrt(np.sum(cc**2, axis=2)).mean(axis=1)
     XX *= w[np.newaxis]
     return XX
 
 
-def compute_PCA_var2_template(
-    dss, sl=None, max_npc=None, flavor="sklearn", demean=True
-):
+def compute_PCA_var2_template(dss, sl=None, max_npc=None, flavor="sklearn"):
     if sl is not None:
         dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(
-        dss, max_npc=max_npc, flavor=flavor, adjust_ns=False, demean=demean
-    )
+    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=False)
     # w = np.sqrt(np.sum(cc**2, axis=2)).mean(axis=1)
     w = np.exp(0.5 * np.log(np.sum(cc**2, axis=2)).mean(axis=1))
     XX *= w[np.newaxis]
@@ -222,7 +195,7 @@ def compute_procrustes_template(
 
 
 def compute_template(
-    dss, sl=None, kind="procrustes", max_npc=None, common_topography=False, demean=False
+    dss, sl=None, kind="procrustes", max_npc=None, common_topography=False
 ):
     mapping = {
         "pca": compute_PCA_template,
@@ -235,7 +208,7 @@ def compute_template(
             dss=dss, sl=sl, reflection=True, scaling=False, zscore_common=True
         )
     elif kind in mapping:
-        tmpl = mapping[kind](dss=dss, sl=sl, max_npc=max_npc, demean=demean)
+        tmpl = mapping[kind](dss=dss, sl=sl, max_npc=max_npc)
     else:
         raise ValueError
 
