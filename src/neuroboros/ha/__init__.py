@@ -5,3 +5,4 @@ from .ridge import ridge, ridge_grid, ensemble_ridge
 from .local_template import compute_template
 from .ensemble import compute_ensemble_indices
 from .sparse import initialize_sparse_matrix
+from .transform import Transform

@@ -24,7 +24,7 @@ class TestCSCBlockOffsets:
         arr[np.ix_(rows, cols)] = 0
         assert not arr.any(), "entries outside the block must stay zero"
 
-    def test_outside_pattern(self):
+    def test_outside_structure(self):
         rng = np.random.default_rng(1)
         sls = make_searchlights(rng)
         mat = initialize_sparse_matrix(sls, nv=60)
@@ -58,18 +58,20 @@ class TestSearchlightHyperalignment:
     def test_rectangular(self):
         rng = np.random.default_rng(3)
         sls_X = make_searchlights(rng, nv=60)
-        sls_Y = make_searchlights(rng, nv=40, size=5)
+        sls_out = make_searchlights(rng, nv=40, size=5)
         X = rng.standard_normal((30, 60))
         Y = rng.standard_normal((30, 40))
         sl_func = lambda a, b: np.linalg.lstsq(a, b, rcond=None)[0]
 
-        dense = searchlight_hyperalignment(X, Y, sls_X, sls_Y=sls_Y, sl_func=sl_func)
-        pattern = sparse.lil_matrix((60, 40))
-        for sl_X, sl_Y in zip(sls_X, sls_Y):
-            pattern[np.ix_(sl_X, sl_Y)] = 1.0
-        mat0 = pattern.tocsr()  # also exercises non-CSC input
+        dense = searchlight_hyperalignment(
+            X, Y, sls_X, sls_out=sls_out, sl_func=sl_func
+        )
+        structure = sparse.lil_matrix((60, 40))
+        for sl_X, sl_Y in zip(sls_X, sls_out):
+            structure[np.ix_(sl_X, sl_Y)] = 1.0
+        mat0 = structure.tocsr()  # also exercises non-CSC input
         mat0.data[:] = 0
         xfm = searchlight_hyperalignment(
-            X, Y, sls_X, sls_Y=sls_Y, sl_func=sl_func, mat0=mat0
+            X, Y, sls_X, sls_out=sls_out, sl_func=sl_func, mat0=mat0
         )
         np.testing.assert_allclose(xfm.toarray(), dense)

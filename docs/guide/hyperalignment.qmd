@@ -96,7 +96,7 @@ xfm.shape  # (77326, 77326)
 ```
 
 ::: {.column-margin}
-`mat0` preallocates the sparsity pattern determined by the searchlights.
+`mat0` preallocates the sparsity structure determined by the searchlights.
 Reusing this empty matrix for each participant avoids repeatedly building that structure; each participant still gets a separately fitted transformation.
 :::
 
@@ -119,7 +119,7 @@ aligned.shape  # (1781, 77326)
 
 ## Align the second participant
 
-Reuse the template, mapping, searchlights, and sparsity pattern for participant `02`.
+Reuse the template, mapping, searchlights, and sparsity structure for participant `02`.
 Here, `nb.record` caches the connectivity profiles and fitted transformation (see [Saving, loading, and caching results](io.qmd)):
 
 ```python

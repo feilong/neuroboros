@@ -8,6 +8,7 @@ from .local_template import compute_template
 from .procrustes import procrustes
 from .ridge import ridge
 from .sparse import csc_block_offsets
+from .transform import Transform
 
 
 def compute_searchlight_weights(sls, dists=None, radius=None, return_sparse=False):
@@ -81,7 +82,7 @@ def compute_searchlight_weights(sls, dists=None, radius=None, return_sparse=Fals
 
 
 def searchlight_hyperalignment(
-    X, Y, sls, sls_Y=None, sl_func=None, mat0=None, weights=None
+    X, Y, sls, sls_out=None, sl_func=None, mat0=None, weights=None
 ):
     """
     Searchlight hyperalignment.
@@ -95,28 +96,30 @@ def searchlight_hyperalignment(
     sls : list of ndarrays
         Each ndarray contains the indices of the vertices in the searchlight
         for the first data matrix.
-    sls_Y : list of ndarrays or None, default=None
+    sls_out : list of ndarrays or None, default=None
         Searchlight indices for the second data matrix, if different from
         ``sls``.
     sl_func : callable
         A function that takes two arrays and computes the transformation
         between them.
-    mat0 : sparse matrix or None, default=None
-        The sparse matrix to initialize the transformation, because changing
-        sparse matrix sparsity is very slow. If None, initialize using a dense
-        array of zeros.
+    mat0 : Transform, sparse matrix or None, default=None
+        An all-zero transform with the sparsity structure of the searchlights,
+        as returned by `Transform.from_searchlights` or
+        `initialize_sparse_matrix`. It is copied, not modified. If None,
+        a dense array of zeros is used instead.
     weights : list of ndarrays or None, default=None
         Weights for combining searchlight transformations. If None, simply add
         the transformations without weighting.
 
     Returns
     -------
-    mat : sparse matrix or ndarray
-        The resulting transformation matrix, where each row corresponds to a
-        vertex in ``X`` and each column corresponds to a vertex in ``Y``.
+    mat : Transform, sparse matrix or ndarray
+        The resulting transformation matrix, of the same kind as ``mat0``.
+        Each row corresponds to a vertex in ``X`` and each column to a vertex
+        in ``Y``, so that ``X @ mat`` approximates ``Y``.
     """
-    if sls_Y is None:
-        sls_Y = sls
+    if sls_out is None:
+        sls_out = sls
     if weights is None:
         weights = [None] * len(sls)
 
@@ -125,6 +128,10 @@ def searchlight_hyperalignment(
 
         def add_block(sl_X, sl_Y, t):
             mat[np.ix_(sl_X, sl_Y)] += t
+
+    elif isinstance(mat0, Transform):
+        mat = mat0.copy()
+        add_block = mat.add_block
 
     else:
         # Write directly into the ``data`` array of the preallocated CSC
@@ -138,7 +145,7 @@ def searchlight_hyperalignment(
             offsets = csc_block_offsets(indptr, indices, sl_X, sl_Y)
             data[offsets] += t.T.ravel()
 
-    for sl_X, sl_Y, w in zip(sls, sls_Y, weights):
+    for sl_X, sl_Y, w in zip(sls, sls_out, weights):
         t = sl_func(X[:, sl_X], Y[:, sl_Y])
         if w is not None:
             t = t * w[np.newaxis]
@@ -147,7 +154,7 @@ def searchlight_hyperalignment(
 
 
 def searchlight_procrustes(
-    X, Y, sls, sls_Y=None, mat0=None, reflection=True, scaling=False, weights=None
+    X, Y, sls, sls_out=None, mat0=None, reflection=True, scaling=False, weights=None
 ):
     """
     Searchlight hyperalignment using orthogonal Procrustes.
@@ -161,13 +168,14 @@ def searchlight_procrustes(
     sls : list of ndarrays
         Each ndarray contains the indices of the vertices in the searchlight
         for the first data matrix.
-    sls_Y : list of ndarrays or None, default=None
+    sls_out : list of ndarrays or None, default=None
         Searchlight indices for the second data matrix, if different from
         ``sls``.
-    mat0 : sparse matrix or None, default=None
-        The sparse matrix to initialize the transformation, because changing
-        sparse matrix sparsity is very slow. If None, initialize using a dense
-        array of zeros.
+    mat0 : Transform, sparse matrix or None, default=None
+        An all-zero transform with the sparsity structure of the searchlights,
+        as returned by `Transform.from_searchlights` or
+        `initialize_sparse_matrix`. It is copied, not modified. If None,
+        a dense array of zeros is used instead.
     reflection : bool, default=True
         Whether allows reflection in the transformation (True) or not (False).
     scaling : bool, default=False
@@ -178,18 +186,19 @@ def searchlight_procrustes(
 
     Returns
     -------
-    mat : sparse matrix or ndarray
-        The resulting transformation matrix, where each row corresponds to a
-        vertex in ``X`` and each column corresponds to a vertex in ``Y``.
+    mat : Transform, sparse matrix or ndarray
+        The resulting transformation matrix, of the same kind as ``mat0``.
+        Each row corresponds to a vertex in ``X`` and each column to a vertex
+        in ``Y``, so that ``X @ mat`` approximates ``Y``.
     """
     sl_func = functools.partial(procrustes, reflection=reflection, scaling=scaling)
     xfm = searchlight_hyperalignment(
-        X, Y, sls, sls_Y=sls_Y, sl_func=sl_func, mat0=mat0, weights=weights
+        X, Y, sls, sls_out=sls_out, sl_func=sl_func, mat0=mat0, weights=weights
     )
     return xfm
 
 
-def searchlight_ridge(X, Y, sls, sls_Y=None, mat0=None, alpha=1e3, weights=None):
+def searchlight_ridge(X, Y, sls, sls_out=None, mat0=None, alpha=1e3, weights=None):
     """
     Searchlight hyperalignment using ridge regression.
 
@@ -202,13 +211,14 @@ def searchlight_ridge(X, Y, sls, sls_Y=None, mat0=None, alpha=1e3, weights=None)
     sls : list of ndarrays
         Each ndarray contains the indices of the vertices in the searchlight
         for the first data matrix.
-    sls_Y : list of ndarrays or None, default=None
+    sls_out : list of ndarrays or None, default=None
         Searchlight indices for the second data matrix, if different from
         ``sls``.
-    mat0 : sparse matrix or None, default=None
-        The sparse matrix to initialize the transformation, because changing
-        sparse matrix sparsity is very slow. If None, initialize using a dense
-        array of zeros.
+    mat0 : Transform, sparse matrix or None, default=None
+        An all-zero transform with the sparsity structure of the searchlights,
+        as returned by `Transform.from_searchlights` or
+        `initialize_sparse_matrix`. It is copied, not modified. If None,
+        a dense array of zeros is used instead.
     alpha : float, default=1e3
         The regularization parameter for ridge regression.
     weights : list of ndarrays or None, default=None
@@ -217,13 +227,14 @@ def searchlight_ridge(X, Y, sls, sls_Y=None, mat0=None, alpha=1e3, weights=None)
 
     Returns
     -------
-    mat : sparse matrix or ndarray
-        The resulting transformation matrix, where each row corresponds to a
-        vertex in ``X`` and each column corresponds to a vertex in ``Y``.
+    mat : Transform, sparse matrix or ndarray
+        The resulting transformation matrix, of the same kind as ``mat0``.
+        Each row corresponds to a vertex in ``X`` and each column to a vertex
+        in ``Y``, so that ``X @ mat`` approximates ``Y``.
     """
     sl_func = functools.partial(ridge, alpha=alpha)
     xfm = searchlight_hyperalignment(
-        X, Y, sls, sls_Y=sls_Y, sl_func=sl_func, mat0=mat0, weights=weights
+        X, Y, sls, sls_out=sls_out, sl_func=sl_func, mat0=mat0, weights=weights
     )
     return xfm
 

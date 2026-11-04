@@ -76,6 +76,8 @@ def save(fn, data):
 
     If ``fn`` ends with ".npy", save as npy file.
     If ``fn`` ends with ".npz" and ``data`` is sparse, save as npz file.
+    If ``fn`` ends with ".npz" and ``data`` is a ``Transform``, save the full
+    sparse matrix as npz file.
     If dict and ``fn`` ends with ".npz", save as npz file.
     If ``fn`` ends with ".pkl", save using ``pickle.dump``.
     If ``fn`` ends with ".png", save as PNG file (requires the Pillow
@@ -116,6 +118,12 @@ def save(fn, data):
 
     if fn.endswith(".npz") and sparse.issparse(data):
         return sparse.save_npz(fn, data)
+    if fn.endswith(".npz"):
+        from ..ha.transform import Transform
+
+        if isinstance(data, Transform):
+            # Full matrix in the original vertex order, loadable by ``load``.
+            return data.save(fn, full=True)
     if fn.endswith(".npz") and isinstance(data, dict):
         return np.savez(fn, **data)
 
