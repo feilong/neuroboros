@@ -18,6 +18,7 @@ MEASURES = [
 ]
 PARCELLATIONS = ["aparc", "aparc.DKTatlas", "aparc.a2009s", "HCP_MMP", "HCP_MMP_22"]
 
+# fmt: off
 # Glasser et al. (2016) grouped the 180 HCP_MMP areas of each hemisphere into
 # 22 regions (Supplementary Neuroanatomical Results, sections 1-22). Element
 # i contains the region label (1-22) for area label i + 1.
@@ -33,6 +34,56 @@ HCP_MMP_AREA_TO_REGION = np.array([
     13, 5, 5, 5, 5, 4, 18, 18, 4, 19, 19, 20, 12, 12, 12, 20, 21, 14, 10,
     10, 11, 11, 14, 12, 19, 19,
 ])
+
+# Short names of the 180 HCP_MMP areas; element i is the name of area i + 1.
+HCP_MMP_AREA_NAMES = (
+    "V1", "MST", "V6", "V2", "V3", "V4", "V8", "4", "3b", "FEF", "PEF", "55b",
+    "V3A", "RSC", "POS2", "V7", "IPS1", "FFC", "V3B", "LO1", "LO2", "PIT",
+    "MT", "A1", "PSL", "SFL", "PCV", "STV", "7Pm", "7m", "POS1", "23d",
+    "v23ab", "d23ab", "31pv", "5m", "5mv", "23c", "5L", "24dd", "24dv", "7AL",
+    "SCEF", "6ma", "7Am", "7PL", "7PC", "LIPv", "VIP", "MIP", "1", "2", "3a",
+    "6d", "6mp", "6v", "p24pr", "33pr", "a24pr", "p32pr", "a24", "d32", "8BM",
+    "p32", "10r", "47m", "8Av", "8Ad", "9m", "8BL", "9p", "10d", "8C", "44",
+    "45", "47l", "a47r", "6r", "IFJa", "IFJp", "IFSp", "IFSa", "p9-46v", "46",
+    "a9-46v", "9-46d", "9a", "10v", "a10p", "10pp", "11l", "13l", "OFC", "47s",
+    "LIPd", "6a", "i6-8", "s6-8", "43", "OP4", "OP1", "OP2-3", "52", "RI",
+    "PFcm", "PoI2", "TA2", "FOP4", "MI", "Pir", "AVI", "AAIC", "FOP1", "FOP3",
+    "FOP2", "PFt", "AIP", "EC", "PreS", "H", "ProS", "PeEc", "STGa", "PBelt",
+    "A5", "PHA1", "PHA3", "STSda", "STSdp", "STSvp", "TGd", "TE1a", "TE1p",
+    "TE2a", "TF", "TE2p", "PHT", "PH", "TPOJ1", "TPOJ2", "TPOJ3", "DVT", "PGp",
+    "IP2", "IP1", "IP0", "PFop", "PF", "PFm", "PGi", "PGs", "V6A", "VMV1",
+    "VMV3", "PHA2", "V4t", "FST", "V3CD", "LO3", "VMV2", "31pd", "31a", "VVC",
+    "25", "s32", "pOFC", "PoI1", "Ig", "FOP5", "p10p", "p47r", "TGv", "MBelt",
+    "LBelt", "A4", "STSva", "TE1m", "PI", "a32pr", "p24",
+)
+
+# Names of the 22 HCP_MMP regions, from the section titles of the
+# Supplementary Neuroanatomical Results; element i is the name of region i + 1.
+HCP_MMP_REGION_NAMES = (
+    "Primary Visual Cortex",
+    "Early Visual Cortex",
+    "Dorsal Stream Visual Cortex",
+    "Ventral Stream Visual Cortex",
+    "MT+ Complex and Neighboring Visual Areas",
+    "Somatosensory and Motor Cortex",
+    "Paracentral Lobular and Mid Cingulate Cortex",
+    "Premotor Cortex",
+    "Posterior Opercular Cortex",
+    "Early Auditory Cortex",
+    "Auditory Association Cortex",
+    "Insular and Frontal Opercular Cortex",
+    "Medial Temporal Cortex",
+    "Lateral Temporal Cortex",
+    "Temporo-Parieto-Occipital Junction",
+    "Superior Parietal Cortex",
+    "Inferior Parietal Cortex",
+    "Posterior Cingulate Cortex",
+    "Anterior Cingulate and Medial Prefrontal Cortex",
+    "Orbital and Polar Frontal Cortex",
+    "Inferior Frontal Cortex",
+    "DorsoLateral Prefrontal Cortex",
+)
+# fmt: on
 
 
 def get_morphometry(which, lr, space="onavg-ico32", **kwargs):
@@ -81,7 +132,9 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
         'HCP_MMP_22' is 'HCP_MMP' with its 180 areas per hemisphere merged
         into the 22 regions of Glasser et al. (2016).
     lr : str
-        Hemisphere, either 'l', 'r', or 'lr'.
+        Hemisphere, either 'l', 'r', or 'lr', or 'meta' to get the names of
+        the parcels instead of the parcellation. With 'meta', ``space``,
+        ``prob``, and ``**kwargs`` are ignored.
     space : str, default='onavg-ico32'
         Surface space.
     prob : bool, default=False
@@ -96,9 +149,17 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
 
     Returns
     -------
-    parc : ndarray
+    parc : ndarray or dict
         The cortical parcellation. It is a discrete parcellation if ``prob``
         is False, and a probabilistic parcellation if ``prob`` is True.
+        For ``lr='meta'``, a dict mapping each parcel label to its name,
+        e.g., ``{1: 'V1', ...}`` for 'HCP_MMP' and
+        ``{1: 'Primary Visual Cortex', ...}`` for 'HCP_MMP_22'. The keys
+        are the labels of the discrete parcellation, excluding the
+        medial-wall label -1, and row ``i`` of the probabilistic
+        parcellation corresponds to key ``i + 1``. Parcel-name lookup is
+        currently supported only for 'HCP_MMP' and 'HCP_MMP_22'; other
+        parcellations raise ``NotImplementedError``.
         For 'HCP_MMP_22', the discrete parcellation has shape
         (n_vertices,) with region labels 1-22 and -1 for the medial wall,
         and the probabilistic one has shape (22, n_vertices) with each row
@@ -107,6 +168,12 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
         are concatenated along the vertex axis.
     """
     assert which in PARCELLATIONS
+    if lr == "meta":
+        if which == "HCP_MMP":
+            return dict(enumerate(HCP_MMP_AREA_NAMES, start=1))
+        if which == "HCP_MMP_22":
+            return dict(enumerate(HCP_MMP_REGION_NAMES, start=1))
+        raise NotImplementedError(f"Parcel names are not available for {which!r}.")
     if which == "HCP_MMP_22":
         parc = get_parcellation("HCP_MMP", lr, space=space, prob=prob, **kwargs)
         if prob:
