@@ -16,7 +16,23 @@ MEASURES = [
     "thickness",
     "volume",
 ]
-PARCELLATIONS = ["aparc", "aparc.DKTatlas", "aparc.a2009s", "HCP_MMP"]
+PARCELLATIONS = ["aparc", "aparc.DKTatlas", "aparc.a2009s", "HCP_MMP", "HCP_MMP_22"]
+
+# Glasser et al. (2016) grouped the 180 HCP_MMP areas of each hemisphere into
+# 22 regions (Supplementary Neuroanatomical Results, sections 1-22). Element
+# i contains the region label (1-22) for area label i + 1.
+HCP_MMP_AREA_TO_REGION = np.array([
+    1, 5, 3, 2, 2, 2, 4, 6, 6, 8, 8, 8, 3, 18, 18, 3, 3, 4, 3, 5, 5, 4, 5,
+    10, 15, 22, 18, 15, 16, 18, 18, 18, 18, 18, 18, 7, 7, 18, 7, 7, 7, 16,
+    7, 7, 16, 16, 16, 16, 16, 16, 6, 6, 6, 8, 7, 8, 19, 19, 19, 19, 19, 19,
+    19, 19, 19, 20, 22, 22, 19, 22, 22, 20, 22, 21, 21, 21, 20, 8, 21, 21,
+    21, 21, 22, 22, 22, 22, 22, 19, 20, 20, 20, 20, 20, 20, 16, 8, 22, 22,
+    9, 9, 9, 9, 12, 10, 9, 12, 11, 12, 12, 12, 12, 12, 9, 12, 12, 17, 16,
+    13, 13, 13, 18, 13, 11, 10, 11, 13, 13, 11, 11, 11, 14, 14, 14, 14, 14,
+    14, 14, 5, 15, 15, 15, 18, 17, 17, 17, 17, 17, 17, 17, 17, 17, 3, 4, 4,
+    13, 5, 5, 5, 5, 4, 18, 18, 4, 19, 19, 20, 12, 12, 12, 20, 21, 14, 10,
+    10, 11, 11, 14, 12, 19, 19,
+])
 
 
 def get_morphometry(which, lr, space="onavg-ico32", **kwargs):
@@ -61,7 +77,9 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
     ----------
     which : str
         Which parcellation to get. One of the following:
-        'aparc', 'aparc.DKTatlas', 'aparc.a2009s', 'HCP_MMP'.
+        'aparc', 'aparc.DKTatlas', 'aparc.a2009s', 'HCP_MMP', 'HCP_MMP_22'.
+        'HCP_MMP_22' is 'HCP_MMP' with its 180 areas per hemisphere merged
+        into the 22 regions of Glasser et al. (2016).
     lr : str
         Hemisphere, either 'l', 'r', or 'lr'.
     space : str, default='onavg-ico32'
@@ -70,7 +88,7 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
         Whether to load the probabilistic version of the parcellation.
     **kwargs : dict
         Optional keyword arguments. ``group`` is the participant group: for
-        'HCP_MMP', one of 'Q1-Q6_Related420' (default),
+        'HCP_MMP' and 'HCP_MMP_22', one of 'Q1-Q6_Related420' (default),
         'Q1-Q6_RelatedParcellation210', or 'Q1-Q6_RelatedValidation210'; for
         other parcellations, it defaults to 'on1031' with ``avg_type``
         defaulting to 'trimmed'. ``resample`` is the resampling method,
@@ -81,8 +99,26 @@ def get_parcellation(which, lr, space="onavg-ico32", prob=False, **kwargs):
     parc : ndarray
         The cortical parcellation. It is a discrete parcellation if ``prob``
         is False, and a probabilistic parcellation if ``prob`` is True.
+        For 'HCP_MMP_22', the discrete parcellation has shape
+        (n_vertices,) with region labels 1-22 and -1 for the medial wall,
+        and the probabilistic one has shape (22, n_vertices) with each row
+        the summed probabilities of the areas in that region. With
+        ``lr='lr'``, the two hemispheres share the same region labels and
+        are concatenated along the vertex axis.
     """
     assert which in PARCELLATIONS
+    if which == "HCP_MMP_22":
+        parc = get_parcellation("HCP_MMP", lr, space=space, prob=prob, **kwargs)
+        if prob:
+            # Sum the probabilities of the areas within each region.
+            regions = np.zeros((22,) + parc.shape[1:], dtype=parc.dtype)
+            np.add.at(regions, HCP_MMP_AREA_TO_REGION - 1, parc)
+            return regions
+        # Areas are labeled 1-180 in each hemisphere; -1 is the medial wall.
+        regions = np.full_like(parc, -1)
+        mask = parc > 0
+        regions[mask] = HCP_MMP_AREA_TO_REGION[parc[mask] - 1]
+        return regions
     if lr == "lr":
         lh = get_parcellation(which, "l", space=space, prob=prob, **kwargs)
         rh = get_parcellation(which, "r", space=space, prob=prob, **kwargs)
