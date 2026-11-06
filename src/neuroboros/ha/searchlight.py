@@ -199,7 +199,9 @@ def searchlight_procrustes(
     return xfm
 
 
-def searchlight_ridge(X, Y, sls, sls_out=None, mat0=None, alpha=1e3, weights=None):
+def searchlight_ridge(
+    X, Y, sls, sls_out=None, mat0=None, alpha=1e3, weights=None, *, solver="eigh"
+):
     """
     Searchlight hyperalignment using ridge regression.
 
@@ -225,6 +227,8 @@ def searchlight_ridge(X, Y, sls, sls_out=None, mat0=None, alpha=1e3, weights=Non
     weights : list of ndarrays or None, default=None
         Weights for combining searchlight transformations. If None, simply add
         the transformations without weighting.
+    solver : {'eigh', 'svd'}, default='eigh'
+        Solver of the local ridge regressions; see `ridge_path`.
 
     Returns
     -------
@@ -233,7 +237,7 @@ def searchlight_ridge(X, Y, sls, sls_out=None, mat0=None, alpha=1e3, weights=Non
         Each row corresponds to a vertex in ``X`` and each column to a vertex
         in ``Y``, so that ``X @ mat`` approximates ``Y``.
     """
-    sl_func = functools.partial(ridge, alpha=alpha)
+    sl_func = functools.partial(ridge, alpha=alpha, solver=solver)
     xfm = searchlight_hyperalignment(
         X, Y, sls, sls_out=sls_out, sl_func=sl_func, mat0=mat0, weights=weights
     )
