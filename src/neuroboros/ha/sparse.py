@@ -50,8 +50,7 @@ def initialize_sparse_matrix(
         searchlight ``k``.
     nv_out : int, optional
         Number of output vertices when ``sls_out`` is provided. If None,
-        inferred from the largest output searchlight index. Must be None
-        when ``sls_out`` is None; the output space then matches the input.
+        inferred from the largest output searchlight index.
 
     Returns
     -------

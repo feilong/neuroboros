@@ -42,6 +42,7 @@ from .isc import compute_isc as isc
 from .plot2d import Image
 from .plot2d import brain_plot as plot
 from .plot_mebrains import plot_mebrains as plot_mebrains
+from .searchlights import Searchlights
 from .searchlights import get_searchlights as sls
 from .spaces import get_distances as distances
 from .spaces import get_geometry as geometry

@@ -47,7 +47,8 @@ def compute_searchlight_weights(sls, dists=None, radius=None, return_sparse=Fals
         column corresponds to a vertex. Returned only if `return_sparse` is
         True.
     """
-    nv = int(np.concatenate(sls).max()) + 1
+    indices = np.concatenate(sls) if len(sls) else np.zeros(0, dtype=np.int64)
+    nv = int(indices.max()) + 1 if len(indices) else 0
     weights_sum = np.zeros((nv,))
     weights = []
 

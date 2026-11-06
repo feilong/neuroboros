@@ -82,13 +82,13 @@ class Transform:
         sls_out : list of ndarrays or None, default=None
             Searchlights in the output space, if different from ``sls``.
         nv : int or None, default=None
-            Number of input vertices. If None, inferred from the largest
-            input searchlight index.
+            Number of input vertices. If None, taken from ``sls.nv`` when
+            ``sls`` is a `Searchlights` object, and otherwise inferred from
+            the largest input searchlight index.
         nv_out : int or None, default=None
             Number of output vertices when ``sls_out`` is provided. If None,
-            inferred from the largest output searchlight index. When
-            ``sls_out`` is None, the output space is the input space and
-            ``nv_out`` must be None.
+            taken from ``sls_out.nv`` when available, and otherwise inferred
+            from the largest output searchlight index.
         dtype : dtype, default=np.float64
             The dtype of the stored values.
 
@@ -96,6 +96,10 @@ class Transform:
         -------
         xfm : Transform
         """
+        if nv is None:
+            nv = getattr(sls, "nv", None)
+        if nv_out is None and sls_out is not None:
+            nv_out = getattr(sls_out, "nv", None)
         structure = initialize_sparse_matrix(
             sls, nv=nv, sls_out=sls_out, nv_out=nv_out, dtype=dtype
         )
