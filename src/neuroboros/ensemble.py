@@ -1,3 +1,5 @@
+import operator
+
 import numpy as np
 
 
@@ -129,6 +131,135 @@ def kfold_bagging_groups(groups, n_folds=5, n_reps=20, seed=0):
                 [gi for gi, g in enumerate(groups) if not np.isin(g, train_idx).any()]
             )
             indices_li.append((train_idx, test_groups))
+
+    return indices_li
+
+
+def _check_int(name, value, minimum):
+    """Return ``value`` as an int, which must be at least ``minimum``."""
+    try:
+        value = operator.index(value)
+    except TypeError:
+        raise TypeError(f"`{name}` must be an integer, got {value!r}.") from None
+    if value < minimum:
+        raise ValueError(f"`{name}` must be at least {minimum}, got {value}.")
+    return value
+
+
+def _with_neighbors(idx, n, buffersize):
+    """Mark the samples ``idx`` and their ``buffersize`` neighbors on each side."""
+    marked = np.zeros(n, dtype=bool)
+    for offset in range(-buffersize, buffersize + 1):
+        shifted = idx + offset
+        marked[shifted[(shifted >= 0) & (shifted < n)]] = True
+    return marked
+
+
+def kfold_bagging_blocks(
+    n, n_folds=5, n_reps=20, blocksize=4, buffersize=4, seed=0  # , mask=None
+):
+    """Generate train and test indices for k-fold bagging of a time series.
+
+    Like `kfold_bagging`, but for samples ordered in time, such as fMRI
+    time points, whose neighbors are correlated. The folds are formed from
+    blocks of consecutive samples rather than from single samples, and a
+    buffer of ``buffersize`` samples separates the training and test sets
+    on both sides, so that no test sample is adjacent to a training sample
+    when ``buffersize > 0``.
+
+    In each repetition, the samples are divided into consecutive blocks of
+    ``blocksize`` samples, and the blocks are randomly divided into k
+    folds. When ``n`` is not a multiple of ``blocksize``, the remaining
+    samples are randomly divided between the first and the last block, so
+    that every sample belongs to a block. Each time, the samples of one
+    fold are withheld, and the remaining samples, except those within the
+    buffer of a withheld sample, are the training candidates, which are
+    resampled with replacement to generate the training set. The test set
+    contains the samples whose distance from every selected training
+    sample exceeds ``buffersize``. As in `kfold_bagging`, every sample is
+    withheld once per repetition, so it is a test sample at least once in
+    each repetition.
+
+    The total number of train-test pairs is n_reps * n_folds.
+
+    Parameters
+    ----------
+    n : int
+        Number of samples in the time series.
+    n_folds : int, default=5
+        Number of folds.
+    n_reps : int, default=20
+        Number of repetitions of the k-fold procedure.
+    blocksize : int, default=4
+        Number of consecutive samples in a block.
+    buffersize : int, default=4
+        Number of samples on each side of a test sample that are excluded
+        from training, and vice versa. Zero disables the buffer.
+    seed : int, default=0
+        Random seed for the random number generator.
+
+    Returns
+    -------
+    indices_li : list of tuples
+        List of tuples of training and test indices. The training indices
+        contain repeats, because the training set is a bootstrap sample
+        of the training candidates with ``n`` samples.
+    """
+    # Parameter kept for later:
+    # mask : ndarray of bool of shape (n,) or None, default=None
+    #     Samples to use, e.g., to exclude censored time points. Excluded
+    #     samples are never in the training or test sets, but they still
+    #     count as neighbors when the buffers are applied. The returned
+    #     indices refer to the ``mask.sum()`` samples that are kept, i.e.,
+    #     they index ``data[mask]`` rather than ``data``.
+    n = _check_int("n", n, 1)
+    n_folds = _check_int("n_folds", n_folds, 2)
+    n_reps = _check_int("n_reps", n_reps, 1)
+    blocksize = _check_int("blocksize", blocksize, 1)
+    buffersize = _check_int("buffersize", buffersize, 0)
+    n_blocks, remainder = divmod(n, blocksize)
+    if n_blocks < n_folds:
+        raise ValueError(
+            f"{n} samples form {n_blocks} blocks of {blocksize}, fewer than "
+            f"the {n_folds} folds."
+        )
+
+    # if mask is None:
+    #     mask = np.ones(n, dtype=bool)
+    # else:
+    #     mask = np.asarray(mask, dtype=bool)
+    #     if mask.shape != (n,):
+    #         raise ValueError(f"`mask` must have shape ({n},), got {mask.shape}.")
+    # # Index of each sample among the kept samples.
+    # kept = np.cumsum(mask) - 1
+    # n_kept = int(mask.sum())
+
+    rng = np.random.default_rng(seed=seed)
+    arng = np.arange(n)
+    indices_li = []
+    for _ in range(n_reps):
+        # The first block starts at 0 and the last ends at n, so the block
+        # boundaries absorb the remaining samples at a random split.
+        shift = rng.integers(remainder + 1)
+        boundaries = shift + np.arange(1, n_blocks) * blocksize
+        blocks = np.split(arng, boundaries)
+        folds = np.array_split(rng.permutation(n_blocks), n_folds)
+        for test_blocks in folds:
+            withheld = np.concatenate([blocks[b] for b in test_blocks])
+            candidates = np.where(~_with_neighbors(withheld, n, buffersize))[0]
+            # candidates = np.where(mask & ~_with_neighbors(withheld, n, buffersize))[0]
+            if not len(candidates):
+                raise ValueError(
+                    "No training candidates remain; reduce `buffersize` or "
+                    "the fraction of withheld samples."
+                )
+            train_idx = rng.choice(candidates, size=n, replace=True)
+            # train_idx = rng.choice(candidates, size=n_kept, replace=True)
+            excluded = _with_neighbors(np.unique(train_idx), n, buffersize)
+            test_idx = np.where(~excluded)[0]
+            # test_idx = np.where(mask & ~excluded)[0]
+            indices_li.append((train_idx, test_idx))
+            # indices_li.append((kept[train_idx], kept[test_idx]))
 
     return indices_li
 

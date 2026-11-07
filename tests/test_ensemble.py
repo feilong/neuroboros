@@ -3,7 +3,11 @@ import pytest
 from joblib import cpu_count
 
 import neuroboros as nb
-from neuroboros.ensemble import kfold_bagging_groups, permute_groups
+from neuroboros.ensemble import (
+    kfold_bagging_blocks,
+    kfold_bagging_groups,
+    permute_groups,
+)
 
 
 class TestEnsemble:
@@ -58,6 +62,109 @@ class TestEnsemble:
         )
         counts = np.bincount(all_test, minlength=n)
         assert np.all(counts >= n_perms)
+
+    def test_kfold_bagging_blocks_buffer(self):
+        n, blocksize, buffersize = 503, 4, 3
+        splits = kfold_bagging_blocks(
+            n, n_folds=5, n_reps=4, blocksize=blocksize, buffersize=buffersize
+        )
+        assert len(splits) == 20
+        for train_idx, test_idx in splits:
+            assert len(train_idx) == n
+            assert len(test_idx) > 0
+            assert np.all(np.diff(test_idx) > 0), "test indices are sorted"
+            # Every test sample is more than buffersize away from every
+            # training sample, and nothing else is kept out of the test set.
+            train_unique = np.unique(train_idx)
+            gap = np.abs(test_idx[:, None] - train_unique[None, :]).min(axis=1)
+            assert gap.min() > buffersize
+            rest = np.setdiff1d(np.arange(n), np.union1d(test_idx, train_unique))
+            gap_rest = np.abs(rest[:, None] - train_unique[None, :]).min(axis=1)
+            assert gap_rest.max() <= buffersize
+
+    @pytest.mark.parametrize("n", [200, 203])
+    def test_kfold_bagging_blocks_withheld_fold(self, n):
+        # Without a buffer, the test set is exactly the samples not trained
+        # on, and the withheld sets of one repetition are unions of whole
+        # blocks that tile the series.
+        blocksize, n_folds, n_reps = 5, 4, 3
+        splits = kfold_bagging_blocks(
+            n, n_folds=n_folds, n_reps=n_reps, blocksize=blocksize, buffersize=0
+        )
+        n_blocks, remainder = divmod(n, blocksize)
+        for rep in range(n_reps):
+            withheld_sets = []
+            for train_idx, test_idx in splits[rep * n_folds : (rep + 1) * n_folds]:
+                assert not np.intersect1d(train_idx, test_idx).size
+                untrained = np.setdiff1d(np.arange(n), train_idx)
+                np.testing.assert_array_equal(test_idx, untrained)
+                withheld_sets.append(set(untrained))
+            # The block boundaries of the repetition are not known, so try
+            # every possible split of the remaining samples. For one of
+            # them, every block is absent from training and present in
+            # testing as a whole in at least one fold. (A block can also
+            # be left out of a bootstrap by chance, so not exactly one.)
+            matches = 0
+            for shift in range(remainder + 1):
+                boundaries = shift + np.arange(1, n_blocks) * blocksize
+                blocks = np.split(np.arange(n), boundaries)
+                assert len(blocks) == n_blocks
+                matches += all(
+                    any(set(block) <= withheld for withheld in withheld_sets)
+                    for block in blocks
+                )
+            assert matches >= 1
+
+    @pytest.mark.parametrize("n", [400, 23])
+    @pytest.mark.parametrize("buffersize", [0, 4])
+    def test_kfold_bagging_blocks_each_sample_tested(self, n, buffersize):
+        n_folds, n_reps = 5, 10
+        splits = kfold_bagging_blocks(
+            n, n_folds=n_folds, n_reps=n_reps, buffersize=buffersize, seed=4
+        )
+        for rep in range(n_reps):
+            tested = np.concatenate(
+                [t for _, t in splits[rep * n_folds : (rep + 1) * n_folds]]
+            )
+            assert np.all(np.bincount(tested, minlength=n) >= 1)
+
+    # def test_kfold_bagging_blocks_mask(self):
+    #     n = 120
+    #     mask = np.ones(n, dtype=bool)
+    #     mask[40:50] = False
+    #     mask[77] = False
+    #     kept = np.where(mask)[0]
+    #     splits = kfold_bagging_blocks(
+    #         n, n_folds=4, n_reps=3, buffersize=2, mask=mask
+    #     )
+    #     for train_idx, test_idx in splits:
+    #         assert len(train_idx) == mask.sum()
+    #         assert train_idx.max() < mask.sum() and test_idx.max() < mask.sum()
+    #         # Map back to the original time points and check the buffer.
+    #         train_t, test_t = kept[np.unique(train_idx)], kept[test_idx]
+    #         gap = np.abs(test_t[:, None] - train_t[None, :]).min(axis=1)
+    #         assert gap.min() > 2
+
+    def test_kfold_bagging_blocks_seed_and_errors(self):
+        a = kfold_bagging_blocks(100, n_reps=2, seed=3)
+        b = kfold_bagging_blocks(100, n_reps=2, seed=3)
+        for (ta, sa), (tb, sb) in zip(a, b):
+            np.testing.assert_array_equal(ta, tb)
+            np.testing.assert_array_equal(sa, sb)
+        with pytest.raises(ValueError, match="fewer than"):
+            kfold_bagging_blocks(16, n_folds=5, blocksize=4)
+        with pytest.raises(ValueError, match="blocksize"):
+            kfold_bagging_blocks(100, blocksize=0)
+        with pytest.raises(ValueError, match="buffersize"):
+            kfold_bagging_blocks(100, buffersize=-1)
+        with pytest.raises(ValueError, match="n_reps"):
+            kfold_bagging_blocks(100, n_reps=-1)
+        with pytest.raises(ValueError, match="n_folds"):
+            kfold_bagging_blocks(100, n_folds=1)
+        with pytest.raises(TypeError, match="blocksize"):
+            kfold_bagging_blocks(100, blocksize=4.0)
+        with pytest.raises(ValueError, match="No training candidates"):
+            kfold_bagging_blocks(40, n_folds=5, blocksize=4, buffersize=40)
 
     def test_permute_groups_shape(self):
         groups = [np.array([0, 1]), np.array([2, 3]), np.array([4, 5, 6])]
