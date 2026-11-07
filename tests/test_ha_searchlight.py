@@ -227,6 +227,13 @@ class TestRectangular:
             X, Y, sls, lstsq, sls_out=sls_out, structure=explicit
         )
         np.testing.assert_allclose(xfm2.to_scipy().toarray(), expected, atol=1e-12)
+        # A supplied structure is copied, not filled in, also by the path.
+        assert not explicit.internal_matrix.data.any()
+        paths = searchlight_ridge_path(
+            X, Y, sls, [0.0, 1.0], sls_out=sls_out, structure=explicit
+        )
+        assert not explicit.internal_matrix.data.any()
+        np.testing.assert_allclose(paths[0].to_scipy().toarray(), expected, atol=1e-10)
 
 
 class TestThreads:
@@ -267,13 +274,22 @@ class TestThreads:
             other.internal_matrix.data, default.internal_matrix.data, rtol=1e-9
         )
 
-    def test_empty_searchlights_contribute_nothing(self):
+    @pytest.mark.parametrize(
+        "fit",
+        [
+            searchlight_procrustes,
+            lambda X, Y, sls, **kw: searchlight_ridge_path(X, Y, sls, [1.0, 2.0], **kw)[
+                1
+            ],
+        ],
+    )
+    def test_empty_searchlights_contribute_nothing(self, fit):
         rng = np.random.default_rng(6)
         sls = make_searchlights(rng, nv=40)
         X = rng.standard_normal((50, 40))
         Y = rng.standard_normal((50, 40))
-        with_empty = searchlight_procrustes(X, Y, sls, n_jobs=2)
-        without = searchlight_procrustes(X, Y, [sl for sl in sls if len(sl)])
+        with_empty = fit(X, Y, sls, n_jobs=2)
+        without = fit(X, Y, [sl for sl in sls if len(sl)])
         np.testing.assert_array_equal(
             with_empty.to_scipy().toarray(), without.to_scipy().toarray()
         )
