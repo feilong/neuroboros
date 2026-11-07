@@ -192,6 +192,26 @@ class TestSaveLoad:
             loaded.to_scipy().toarray(), xfm.to_scipy().toarray()
         )
 
+    @pytest.mark.parametrize("fmt", ["csr", "coo"])
+    def test_scipy_formats(self, tmp_path, fmt):
+        # Files from earlier versions hold a sparse matrix of any format.
+        rng = np.random.default_rng(5)
+        xfm0, xfm, X = fitted_transform(rng)
+        mat = xfm.to_scipy().asformat(fmt).astype(np.float32)
+        fn = str(tmp_path / "legacy.npz")
+        sparse.save_npz(fn, mat)
+        loaded = Transform.load(fn)
+        assert loaded.dtype == np.float32
+        assert loaded.nnz == mat.nnz
+        np.testing.assert_allclose(X @ loaded, X @ mat, rtol=1e-5)
+        np.testing.assert_array_equal(loaded.order_in, xfm.order_in)
+
+    def test_load_rejects_npy(self, tmp_path):
+        fn = str(tmp_path / "xfm.npy")
+        np.save(fn, np.eye(3))
+        with pytest.raises(ValueError, match="not an npz file"):
+            Transform.load(fn)
+
     @pytest.mark.parametrize("subclass", [False, True])
     def test_nb_save(self, tmp_path, subclass):
         rng = np.random.default_rng(6)

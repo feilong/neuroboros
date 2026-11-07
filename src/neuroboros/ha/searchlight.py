@@ -204,6 +204,12 @@ def _searchlight_fit(
             f"`structure` has shape {structure.shape}, but the data has "
             f"{shape[0]} input and {shape[1]} output features."
         )
+    if structure.internal_matrix.data.any():
+        raise ValueError(
+            "`structure` must be all zeros; it holds a fitted transform. Use "
+            "`Searchlights.structure`, `Transform.from_searchlights` or "
+            "`Transform.load_structure`."
+        )
     if sls_out is None:
         sls_out = sls
 

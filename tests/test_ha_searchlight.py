@@ -81,6 +81,20 @@ class TestDefaults:
         xfm = searchlight_hyperalignment(X, Y, sls, lstsq, weights=weights)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-12)
 
+    def test_structure_must_be_zero(self):
+        # A fitted transform, e.g., loaded from a file, is not a structure.
+        rng = np.random.default_rng(2)
+        nv = 40
+        sls = make_searchlights(rng, nv)
+        X = rng.standard_normal((50, nv))
+        Y = rng.standard_normal((50, nv))
+        xfm = searchlight_ridge(X, Y, sls)
+        with pytest.raises(ValueError, match="all zeros"):
+            searchlight_ridge(X, Y, sls, structure=xfm)
+        xfm.internal_matrix.data[:] = 0
+        again = searchlight_ridge(X, Y, sls, structure=xfm)
+        assert again.internal_matrix.data.any()
+
 
 class TestRectangular:
     def test_same_indices_different_feature_counts(self):

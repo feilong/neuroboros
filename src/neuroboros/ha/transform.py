@@ -300,7 +300,9 @@ class Transform:
         Parameters
         ----------
         fn : str
-            The file name.
+            The file name, either saved by `save` or a sparse matrix in the
+            original vertex order saved by ``scipy.sparse.save_npz``, such
+            as transforms written by ``nb.save`` or by earlier versions.
         structure : Transform, str or None, default=None
             A Transform with sparsity structure and vertex ordering that
             match the saved values, or the name of a file saved by
@@ -312,7 +314,14 @@ class Transform:
         -------
         xfm : Transform
         """
-        with np.load(fn) as f:
+        f = np.load(fn)
+        if not isinstance(f, np.lib.npyio.NpzFile):
+            raise ValueError(
+                f"{fn} is not an npz file. `load` reads files saved by `save` "
+                "or `scipy.sparse.save_npz`; use `from_scipy` for a matrix in "
+                "memory."
+            )
+        with f:
             # Files written by ``scipy.sparse.save_npz`` also have a "format"
             # entry, holding the matrix format such as "csc".
             fmt = str(f["format"]) if "format" in f else None
