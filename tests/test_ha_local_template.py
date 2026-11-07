@@ -2,24 +2,22 @@ import warnings
 
 import numpy as np
 import pytest
-from scipy.linalg import LinAlgError
 from scipy.stats import zscore
 
-from neuroboros.ha import local_template
 from neuroboros.ha.local_template import (
-    pca_decomposition,
+    compute_gpa_template,
     compute_pca_template,
     compute_pca_var1_template,
     compute_pca_var2_template,
-    compute_gpa_template,
     compute_procrustes_template,
     compute_template,
+    pca_decomposition,
 )
 from neuroboros.linalg.base import svd_pca
 
 
 def low_rank_dss(rng, ns=3, nt=50, nv=20, rank=5, offset=2.0):
-    """Rank-``rank`` data with a nonzero mean, so randomized SVD is exact."""
+    """Rank-``rank + 1`` data with a nonzero mean."""
     X = rng.standard_normal((nt, rank)) @ rng.standard_normal((rank, ns * nv))
     X += offset
     return X.reshape(nt, ns, nv).transpose(1, 0, 2)
@@ -42,7 +40,7 @@ def assert_equal_up_to_sign(a, b, **kwargs):
 
 
 class TestPCADecomposition:
-    @pytest.mark.parametrize("solver", ["randomized", "full"])
+    @pytest.mark.parametrize("solver", ["eigh", "svd"])
     def test_nonzero_mean_not_removed(self, solver):
         rng = np.random.default_rng(0)
         dss = low_rank_dss(rng)
@@ -56,7 +54,7 @@ class TestPCADecomposition:
         centered = svd_pca(X)[:, :6]
         assert not np.allclose(np.abs(scores), np.abs(centered), atol=1e-3)
 
-    @pytest.mark.parametrize("solver", ["randomized", "full"])
+    @pytest.mark.parametrize("solver", ["eigh", "svd"])
     def test_normalize_subjects(self, solver):
         rng = np.random.default_rng(1)
         dss = low_rank_dss(rng)
@@ -69,25 +67,45 @@ class TestPCADecomposition:
         np.testing.assert_allclose(scores_adj, scores / np.sqrt(3), atol=1e-8)
         np.testing.assert_array_equal(loadings_adj, loadings)
 
-    def test_linalg_error_falls_back_to_svd(self, monkeypatch):
+    @pytest.mark.parametrize("shape", [(3, 50, 20), (2, 50, 10), (6, 30, 20)])
+    @pytest.mark.parametrize("full_rank", [True, False])
+    def test_solvers_agree(self, shape, full_rank):
+        # Tall and wide concatenated data, full rank and rank deficient.
         rng = np.random.default_rng(2)
-        dss = low_rank_dss(rng)
-        calls = []
+        ns, nt, nv = shape
+        k = min(nt, ns * nv)
+        if full_rank:
+            dss = rng.standard_normal((ns, nt, nv)) + 2.0
+            rank = k
+        else:
+            dss = low_rank_dss(rng, ns=ns, nt=nt, nv=nv, rank=k - 2)
+            rank = k - 1
+        scores_e, loadings_e = pca_decomposition(dss, solver="eigh")
+        scores_s, loadings_s = pca_decomposition(dss, solver="svd")
+        assert scores_e.shape == (nt, k) and loadings_e.shape == (k, ns, nv)
+        assert_equal_up_to_sign(scores_e, scores_s, atol=1e-8)
+        assert_equal_up_to_sign(loadings_e, loadings_s, atol=1e-8)
+        # The nonzero loadings are orthonormal, and they reconstruct the data.
+        V = loadings_e.reshape(k, -1)
+        V = V[np.abs(V).sum(axis=1) > 0]
+        assert len(V) == rank
+        np.testing.assert_allclose(V @ V.T, np.eye(rank), atol=1e-10)
+        X = dss.transpose(1, 0, 2).reshape(nt, -1)
+        np.testing.assert_allclose(scores_e @ loadings_e.reshape(k, -1), X, atol=1e-8)
 
-        def failing_randomized_svd(*args, **kwargs):
-            calls.append(1)
-            raise LinAlgError("forced")
-
-        monkeypatch.setattr(local_template, "randomized_svd", failing_randomized_svd)
-        scores, loadings = pca_decomposition(
-            dss, max_components=5, solver="randomized", normalize_subjects=True
-        )
-        ref_scores, ref_loadings = pca_decomposition(
-            dss, max_components=5, solver="full", normalize_subjects=True
-        )
-        assert calls == [1]
-        np.testing.assert_array_equal(scores, ref_scores)
-        np.testing.assert_array_equal(loadings, ref_loadings)
+    @pytest.mark.parametrize("solver", ["eigh", "svd"])
+    def test_zero_variance_components(self, solver):
+        # Rank-deficient data: the null components have zero scores and
+        # loadings instead of arbitrary vectors.
+        rng = np.random.default_rng(3)
+        dss = low_rank_dss(rng, ns=2, nt=50, nv=10, rank=3)
+        scores, loadings = pca_decomposition(dss, solver=solver)
+        assert scores.shape == (50, 20)
+        assert np.isfinite(scores).all() and np.isfinite(loadings).all()
+        assert not scores[:, 4:].any() and not loadings[4:].any()
+        assert np.abs(loadings[:4]).sum(axis=(1, 2)).all()
+        scores, loadings = pca_decomposition(dss, max_components=3, solver=solver)
+        assert scores.shape == (50, 3) and loadings.shape == (3, 2, 10)
 
     def test_unknown_solver(self):
         rng = np.random.default_rng(3)
@@ -97,7 +115,6 @@ class TestPCADecomposition:
 
 class TestTemplates:
     def test_pca_templates_agree_on_identical_subjects(self):
-        # Same check as the module's self-test block.
         rng = np.random.default_rng(0)
         dss = zscore(rng.standard_normal((1, 200, 100)), axis=1)
         dss = np.tile(dss, (10, 1, 1))
