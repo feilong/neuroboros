@@ -95,6 +95,7 @@ Both are computed on first use and cached on `sls`, so reusing `sls` for each pa
 :::
 
 The rows of `xfm` are the participant's vertices and the columns are the template's vertices.
+See [Parallel fitting and reproducibility](parallel.qmd) for thread settings and reproducibility guidance.
 
 ## Apply the transformation to new data
 

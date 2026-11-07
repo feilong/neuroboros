@@ -1,0 +1,50 @@
+---
+title: "Parallel fitting and reproducibility"
+---
+
+The searchlight fitters run one local model per searchlight.
+Use the settings below with `searchlight_ridge`, `searchlight_procrustes`, or `searchlight_hyperalignment`.
+
+## Choose the number of threads
+
+For the data prepared in [Connectivity hyperalignment using HyperBrain templates](hyperalignment.qmd):
+
+```python
+from neuroboros.ha import searchlight_ridge
+
+xfm = searchlight_ridge(conn, tpl, sls, n_jobs=4, max_blas_threads=1)
+```
+
+- `n_jobs` controls how many local fits run at once: `1` (the default) runs serially, `4` uses four workers, and `-1` uses all available CPUs. The workers use threads by default.
+- `max_blas_threads` limits the threads used by the linear algebra libraries during fitting. Keep the default of `1` for these small local fits; `None` leaves the existing setting unchanged.
+
+When fitting several participants in separate processes, start with `n_jobs=1` inside each process.
+Using parallelism at both levels can create more threads than available CPUs and slow the analysis down.
+
+## Set environment variables
+
+For a consistent thread limit throughout the analysis, set these variables in your shell **before starting Python or Jupyter**:
+
+```bash
+export OPENBLAS_NUM_THREADS=1     # OpenBLAS
+export MKL_NUM_THREADS=1          # Intel MKL
+export OMP_NUM_THREADS=1          # OpenMP, including OpenMP builds of OpenBLAS
+export VECLIB_MAXIMUM_THREADS=1   # Apple Accelerate
+```
+
+You can set all four; unused libraries ignore their variables.
+These settings also limit operations outside fitting, such as computing connectivity profiles, which may benefit from more threads.
+
+`max_blas_threads` uses [threadpoolctl](https://github.com/joblib/threadpoolctl) to temporarily limit supported libraries, including OpenBLAS and MKL.
+It does not control Apple's Accelerate, so use `VECLIB_MAXIMUM_THREADS` if your installation uses Accelerate.
+The library depends on your NumPy and SciPy installations, not just your operating system; inspect them with `numpy.show_config()` and `scipy.show_config()`.
+
+## Reproduce a fit
+
+The fitters combine local transformations in a fixed searchlight order, regardless of `n_jobs`.
+Using one BLAS thread also avoids changes in the order of floating-point additions caused by BLAS threading.
+For reproducible analyses, keep the input data, preprocessing, searchlights, fitting parameters, and software versions fixed, and record the thread settings.
+If a step uses randomness, fix its seed; a custom `sl_func` must also be deterministic and safe to call from several threads at once.
+
+Exact agreement across machines or numerical libraries is not guaranteed; compare results with a numerical tolerance.
+For MKL, `export MKL_CBWR=COMPATIBLE` selects a consistent code path and enables its conditional reproducibility mode, potentially at a performance cost; see [Intel's reproducibility documentation](https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-windows/2024-1/specifying-code-branches.html) for its conditions.

@@ -28,6 +28,7 @@ This creates `results/isc/` if needed and saves `corr` as a NumPy array.
 | --- | --- | --- |
 | `.npy` | array | `numpy.save` |
 | `.npz` | SciPy sparse matrix | `scipy.sparse.save_npz` |
+| `.npz` | `neuroboros.ha.Transform` | `scipy.sparse.save_npz`, as a sparse matrix in the original vertex order |
 | `.npz` | `dict` of arrays | `numpy.savez` |
 | `.pkl` | picklable Python object | `pickle.dump` |
 | `.png` | array or PIL image | Pillow |
@@ -59,6 +60,9 @@ events = nb.load('sub-01_task-movie_events.tsv')
 | `.csv` | `pandas.read_csv` | DataFrame |
 | `.pkl` | `pickle.load` | the pickled object |
 | `.json`, `.json.gz` | `json.load` | the decoded object |
+
+When a `neuroboros.ha.Transform` is saved to `.npz` with `nb.save`, `nb.load` returns a sparse matrix.
+Use `neuroboros.ha.Transform.load` to read that file as a `Transform`.
 
 ### Passing options to the reader
 
