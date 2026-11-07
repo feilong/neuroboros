@@ -250,8 +250,8 @@ class Transform:
         shape, value dtype, vertex orders, and structure fingerprint. Stored
         values are omitted. One file can be reused for transforms with
         matching sparsity structure and vertex ordering. `load_structure`
-        restores an all-zero transform for use as ``mat0`` in new fits or
-        as ``structure`` in `load`.
+        restores an all-zero transform for use as ``structure`` in new fits
+        and in `load`.
 
         Parameters
         ----------

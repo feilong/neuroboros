@@ -18,6 +18,18 @@ def make_searchlights(rng, nv=60, n_sls=25, size=8):
 lstsq = lambda a, b: np.linalg.lstsq(a, b, rcond=None)[0]
 
 
+def reference_fit(X, Y, sls, sls_out=None, weights=None):
+    """Dense searchlight least squares, for comparison."""
+    sls_out = sls if sls_out is None else sls_out
+    mat = np.zeros((X.shape[1], Y.shape[1]))
+    for i, (sl, sl_out) in enumerate(zip(sls, sls_out)):
+        t = lstsq(X[:, sl], Y[:, sl_out])
+        if weights is not None:
+            t = t * weights[i]
+        mat[np.ix_(sl, sl_out)] += t
+    return mat
+
+
 class TestStructure:
     def test_rectangular_structure(self):
         rng = np.random.default_rng(0)
@@ -59,26 +71,30 @@ class TestStructure:
 
 
 class TestTransform:
-    def test_combine_and_apply(self):
+    @pytest.mark.parametrize("dtype", [np.float64, np.float32])
+    def test_combine_and_apply(self, dtype):
         rng = np.random.default_rng(2)
         sls = make_searchlights(rng)
         X = rng.standard_normal((30, 60))
         Y = rng.standard_normal((30, 60))
         weights = [rng.random(len(sl)) for sl in sls]
 
-        dense = searchlight_hyperalignment(X, Y, sls, sl_func=lstsq, weights=weights)
-        xfm0 = Transform.from_searchlights(sls, nv=60)
+        dense = reference_fit(X, Y, sls, weights=weights)
+        xfm0 = Transform.from_searchlights(sls, nv=60, dtype=dtype)
         xfm = searchlight_hyperalignment(
-            X, Y, sls, sl_func=lstsq, mat0=xfm0, weights=weights
+            X, Y, sls, lstsq, structure=xfm0, weights=weights
         )
 
         assert isinstance(xfm, Transform)
         assert xfm.shape == (60, 60)
-        assert not xfm0.internal_matrix.data.any(), "mat0 must not be modified"
-        np.testing.assert_allclose(xfm.to_scipy().toarray(), dense)
-        np.testing.assert_allclose(X @ xfm, X @ dense)
-        np.testing.assert_allclose(xfm.apply(X), X @ dense)
-        np.testing.assert_allclose(X[0] @ xfm, X[0] @ dense)
+        assert xfm.dtype == dtype
+        assert xfm.nnz == xfm0.nnz
+        assert not xfm0.internal_matrix.data.any(), "structure must not be modified"
+        tol = dict(rtol=1e-5, atol=1e-6) if dtype == np.float32 else {}
+        np.testing.assert_allclose(xfm.to_scipy().toarray(), dense, **tol)
+        np.testing.assert_allclose(X @ xfm, X @ dense, **tol)
+        np.testing.assert_allclose(xfm.apply(X), X @ dense, **tol)
+        np.testing.assert_allclose(X[0] @ xfm, X[0] @ dense, **tol)
 
     def test_rectangular(self):
         rng = np.random.default_rng(3)
@@ -87,10 +103,11 @@ class TestTransform:
         X = rng.standard_normal((30, 60))
         Y = rng.standard_normal((30, 40))
 
-        dense = searchlight_hyperalignment(X, Y, sls, sls_out=sls_out, sl_func=lstsq)
+        weights = [rng.random(len(sl)) for sl in sls_out]
+        dense = reference_fit(X, Y, sls, sls_out, weights)
         xfm0 = Transform.from_searchlights(sls, sls_out=sls_out, nv=60, nv_out=40)
         xfm = searchlight_hyperalignment(
-            X, Y, sls, sls_out=sls_out, sl_func=lstsq, mat0=xfm0
+            X, Y, sls, lstsq, sls_out=sls_out, weights=weights, structure=xfm0
         )
         assert xfm.shape == (60, 40)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), dense)
@@ -119,7 +136,7 @@ class TestTransform:
 
     def test_noncanonical_input(self):
         # Build CSC arrays directly: column 0 is unsorted and repeats row 1.
-        data = np.array([1., 2., 3., 5., 6.])
+        data = np.array([1.0, 2.0, 3.0, 5.0, 6.0])
         indices = np.array([1, 0, 1, 1, 0])
         indptr = np.array([0, 3, 5])
         messy = sparse.csc_matrix((data, indices, indptr), shape=(2, 2))
@@ -129,10 +146,10 @@ class TestTransform:
         xfm = Transform(messy, np.arange(2))
         assert xfm.internal_matrix.has_canonical_format
         assert xfm.nnz == 4
-        expected = np.array([[2., 6.], [4., 5.]])
+        expected = np.array([[2.0, 6.0], [4.0, 5.0]])
         np.testing.assert_array_equal(xfm.to_scipy().toarray(), expected)
         # Canonicalizing the transform must not modify the supplied matrix.
-        np.testing.assert_array_equal(messy.data, [1., 2., 3., 5., 6.])
+        np.testing.assert_array_equal(messy.data, [1.0, 2.0, 3.0, 5.0, 6.0])
         np.testing.assert_array_equal(messy.indices, [1, 0, 1, 1, 0])
         np.testing.assert_array_equal(messy.indptr, [0, 3, 5])
         sl = np.arange(2)
@@ -156,7 +173,7 @@ def fitted_transform(rng, nv=60):
     X = rng.standard_normal((30, nv))
     Y = rng.standard_normal((30, nv))
     xfm0 = Transform.from_searchlights(sls, nv=nv)
-    return xfm0, searchlight_hyperalignment(X, Y, sls, sl_func=lstsq, mat0=xfm0), X
+    return xfm0, searchlight_hyperalignment(X, Y, sls, lstsq, structure=xfm0), X
 
 
 class TestSaveLoad:
@@ -180,12 +197,11 @@ class TestSaveLoad:
         rng = np.random.default_rng(6)
         xfm0, xfm, X = fitted_transform(rng)
         if subclass:
+
             class SubjectTransform(Transform):
                 pass
 
-            xfm = SubjectTransform(
-                xfm.internal_matrix, xfm.order_in, xfm.order_out
-            )
+            xfm = SubjectTransform(xfm.internal_matrix, xfm.order_in, xfm.order_out)
         fn = str(tmp_path / "xfm.npz")
         nb.save(fn, xfm)
         np.testing.assert_allclose(nb.load(fn).toarray(), xfm.to_scipy().toarray())
@@ -226,7 +242,7 @@ class TestSaveLoad:
         sls_out = make_searchlights(rng, nv=40, size=5)
         X = rng.standard_normal((30, 60))
         Y = rng.standard_normal((30, 40))
-        dense = searchlight_hyperalignment(X, Y, sls, sls_out=sls_out, sl_func=lstsq)
+        dense = reference_fit(X, Y, sls, sls_out)
         xfm = Transform.from_scipy(sparse.csc_matrix(dense))
         assert xfm.shape == (60, 40)
         np.testing.assert_allclose(X @ xfm, X @ dense)
@@ -246,9 +262,9 @@ class TestSaveLoad:
         assert structure.dtype == xfm0.dtype
         assert not structure.internal_matrix.data.any()
 
-        xfm = searchlight_hyperalignment(X, Y, sls, sl_func=lstsq, mat0=xfm0)
+        xfm = searchlight_hyperalignment(X, Y, sls, lstsq, structure=xfm0)
         xfm_from_file = searchlight_hyperalignment(
-            X, Y, sls, sl_func=lstsq, mat0=structure
+            X, Y, sls, lstsq, structure=structure
         )
         np.testing.assert_array_equal(
             xfm_from_file.internal_matrix.data, xfm.internal_matrix.data

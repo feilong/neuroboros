@@ -30,6 +30,7 @@ dependencies = [
   "nibabel",
   "requests",
   "joblib",
+  "threadpoolctl",
   "pandas",
   "Pillow",
   "matplotlib",

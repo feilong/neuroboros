@@ -8,7 +8,7 @@ The template itself, and `nb.tpl`, are described in [HyperBrain functional templ
 
 The example aligns two participants in the [Forrest](../reference/Forrest.qmd) dataset, in which participants watched the movie *Forrest Gump* over 8 runs.
 Runs 1–4 are used to estimate the transformations, and runs 5–8 to evaluate them with inter-subject correlation (ISC).
-The hyperalignment algorithms come from the separate [`hyperalignment`](https://github.com/feilong/hyperalignment) package (see [Installation](installation.qmd#optional-packages)).
+The hyperalignment algorithms are in the `neuroboros.ha` module.
 
 ## Overview
 
@@ -25,9 +25,7 @@ First, import the packages and set up the analysis:
 import numpy as np
 from scipy.stats import zscore
 import neuroboros as nb
-from hyperalignment import (
-    initialize_sparse_matrix, searchlight_ridge, searchlight_weights,
-)
+from neuroboros.ha import searchlight_ridge
 
 dset = nb.dataset('forrest')
 train_runs = [1, 2, 3, 4]
@@ -82,22 +80,18 @@ conn.shape  # (1210, 77326)
 The transformation is estimated locally, within searchlights of 20 mm radius.
 The searchlights contain `onavg-ico64` vertices but are centered on the coarser `onavg-ico32` vertices, which keeps their number manageable.
 In each searchlight, ridge regression finds the linear combinations of the participant's vertices that best predict the template's connectivity profiles.
-The overlapping local transformations are combined into a single sparse matrix using distance-based weights, which give more weight to vertices near each searchlight's center:
+The overlapping local transformations are combined into a single sparse transformation using distance-based weights, which give more weight to vertices near each searchlight's center:
 
 ```python
-sls, dists = nb.sls(
-    'lr', radius, space='onavg-ico64', center_space='onavg-ico32',
-    return_dists=True)
-weights = searchlight_weights(sls, dists, radius)
+sls = nb.sls('lr', radius, space='onavg-ico64', center_space='onavg-ico32')
 len(sls)  # 19341
-mat0 = initialize_sparse_matrix(sls)
-xfm = searchlight_ridge(conn, tpl, sls, mat0=mat0, weights=weights)
+xfm = searchlight_ridge(conn, tpl, sls)
 xfm.shape  # (77326, 77326)
 ```
 
 ::: {.column-margin}
-`mat0` preallocates the sparsity structure determined by the searchlights.
-Reusing this empty matrix for each participant avoids repeatedly building that structure; each participant still gets a separately fitted transformation.
+The searchlights carry the distances to their centers, from which `searchlight_ridge` computes the weights, and the sparsity structure of the transformation.
+Both are computed on first use and cached on `sls`, so reusing `sls` for each participant avoids repeatedly building them; each participant still gets a separately fitted transformation.
 :::
 
 The rows of `xfm` are the participant's vertices and the columns are the template's vertices.
@@ -119,7 +113,7 @@ aligned.shape  # (1781, 77326)
 
 ## Align the second participant
 
-Reuse the template, mapping, searchlights, and sparsity structure for participant `02`.
+Reuse the template, mapping, and searchlights for participant `02`.
 Here, `nb.record` caches the connectivity profiles and fitted transformation (see [Saving, loading, and caching results](io.qmd)):
 
 ```python
@@ -132,7 +126,7 @@ sid = '02'
 dm = dset.get_data(sid, 'forrest', train_runs, 'lr', space='onavg-ico64')
 conn = nb.record(f'conn_{sid}.npy', connectivity, return_results=True)(dm)
 xfm = nb.record(f'xfm_{sid}.npz', searchlight_ridge, return_results=True)(
-    conn, tpl, sls, mat0=mat0, weights=weights)
+    conn, tpl, sls)
 dm_test_2 = dset.get_data(
     sid, 'forrest', test_runs, 'lr', space='onavg-ico64')
 aligned_2 = dm_test_2 @ xfm
@@ -225,16 +219,12 @@ targets = zscore(targets, axis=0)
 
 for lr in 'lr':
     tpl = nb.tpl(lr)
-    sls, dists = nb.sls(
-        lr, radius, space='onavg-ico64', center_space='onavg-ico32',
-        return_dists=True)
-    weights = searchlight_weights(sls, dists, radius)
+    sls = nb.sls(lr, radius, space='onavg-ico64', center_space='onavg-ico32')
     dm = dset.get_data('01', 'forrest', train_runs, lr, space='onavg-ico64')
     conn = np.nan_to_num(targets.T @ zscore(dm, axis=0) / dm.shape[0])
-    xfm = searchlight_ridge(
-        conn, tpl, sls, mat0=initialize_sparse_matrix(sls), weights=weights)
+    xfm = searchlight_ridge(conn, tpl, sls)
     nb.save(f'xfm_01_{lr}h.npz', xfm)
-    del dm, conn, tpl, xfm, sls, dists, weights  # release this hemisphere's arrays
+    del dm, conn, tpl, xfm, sls  # release this hemisphere's arrays
 ```
 
 Because searchlights never cross hemispheres, these transformations are the two diagonal blocks of the bilateral transformation.

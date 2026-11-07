@@ -149,10 +149,11 @@ def test_searchlight_ridge_solver(solver):
     X = rng.normal(size=(40, 9))
     Y = rng.normal(size=(40, 9))
     sls = [np.array([3, 0, 2]), np.array([1, 3, 4]), np.array([4, 5, 6])]
+    weights = [np.ones(3), np.ones(3), np.ones(3)]
     expected = np.zeros((9, 9))
     for sl in sls:
         expected[np.ix_(sl, sl)] += _augmented_lstsq(X[:, sl], Y[:, sl], 10.0)
-    actual = searchlight_ridge(X, Y, sls, alpha=10.0, solver=solver)
-    np.testing.assert_allclose(actual, expected, atol=1e-10)
+    actual = searchlight_ridge(X, Y, sls, alpha=10.0, weights=weights, solver=solver)
+    np.testing.assert_allclose(actual.to_scipy().toarray(), expected, atol=1e-10)
     with pytest.raises(ValueError, match="solver"):
         searchlight_ridge(X, Y, sls, solver="typo")

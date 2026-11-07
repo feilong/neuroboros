@@ -161,7 +161,7 @@ def _fit_in_worker(sls, seed, max_nbytes):
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((30, sls.nv))
     Y = rng.standard_normal((30, sls.nv))
-    xfm = searchlight_ridge(X, Y, sls, mat0=structure, weights=sls.weights())
+    xfm = searchlight_ridge(X, Y, sls)
     return dict(
         type=type(sls).__name__,
         n=len(sls),
@@ -483,9 +483,7 @@ class TestSearchlightsClass:
             rng = np.random.default_rng(seed)
             X = rng.standard_normal((30, 20))
             Y = rng.standard_normal((30, 20))
-            expected = searchlight_ridge(
-                X, Y, sls, mat0=structure, weights=sls.weights()
-            )
+            expected = searchlight_ridge(X, Y, sls)
             got = pickle.loads(r["result"])
             np.testing.assert_allclose(got.toarray(), expected.to_scipy().toarray())
         # The parent's structure is still all zeros.
