@@ -2,13 +2,9 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from neuroboros.ha import (
-    Transform,
-    initialize_sparse_matrix,
-    searchlight_hyperalignment,
-)
+from neuroboros.ha import Transform, searchlight_hyperalignment
 import neuroboros as nb
-from neuroboros.ha.sparse import _rcm_order, permute_matrix
+from neuroboros.ha.sparse import _rcm_order, initialize_sparse_matrix, permute_matrix
 
 
 def make_searchlights(rng, nv=60, n_sls=25, size=8):

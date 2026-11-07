@@ -2,8 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from neuroboros.ha import initialize_sparse_matrix
-from neuroboros.ha.sparse import csc_block_offsets
+from neuroboros.ha.sparse import csc_block_offsets, initialize_sparse_matrix
 
 
 def make_searchlights(rng, nv=60, n_sls=25, size=8):
