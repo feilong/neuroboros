@@ -239,17 +239,18 @@ def _searchlight_fit(
             flat.append((block * w).T.ravel())
         return offsets, flat
 
-    tasks = zip(sls, sls_out, weights)
-    if n_jobs == 1:
-        results = (fit(*task) for task in tasks)
-    else:
-        results = Parallel(n_jobs=n_jobs, prefer="threads", return_as="generator")(
-            delayed(fit)(*task) for task in tasks
-        )
-
     mats = [structure.copy() for _ in range(n_models)]
     datas = [mat.internal_matrix.data for mat in mats]
+    tasks = zip(sls, sls_out, weights)
+    # ``Parallel`` starts dispatching tasks when called, so the BLAS limit
+    # must be in place before that.
     with threadpool_limits(limits=max_blas_threads):
+        if n_jobs == 1:
+            results = (fit(*task) for task in tasks)
+        else:
+            results = Parallel(n_jobs=n_jobs, prefer="threads", return_as="generator")(
+                delayed(fit)(*task) for task in tasks
+            )
         for result in results:
             if result is None:
                 continue
@@ -598,25 +599,102 @@ def searchlight_ridge_path(
     )
 
 
-def searchlight_template(dms, sls, dists, radius, n_jobs=1, tpl_kind="pca"):
-    weights = compute_searchlight_weights(sls, dists, radius)
+def searchlight_template(
+    dms, sls, *, kind="pca", weights=None, n_jobs=1, max_blas_threads=1
+):
+    """Build a template by combining local templates across searchlights.
+
+    In each searchlight, a local template is computed from the data of all
+    subjects with `compute_template`. For ``'pca'``, its columns are
+    components rather than vertices, so it is mapped back to the
+    searchlight's vertices by Procrustes alignment to the subjects' data
+    (``common_topography=True``). The local templates are then combined
+    vertex by vertex into one template using ``weights``.
+
+    Parameters
+    ----------
+    dms : ndarray of shape (n_subjects, n_samples, n_features)
+        The data of the subjects, with samples in correspondence across
+        subjects.
+    sls : Searchlights or list of ndarrays
+        Each entry holds the indices of the vertices in a searchlight.
+    kind : {'pca', 'procrustes'}, default='pca'
+        The kind of local template computed by `compute_template`.
+        ``'pca'`` takes the principal components of the subjects' data
+        concatenated along vertices, at most as many as the searchlight has
+        vertices, scaled so that the variance does not grow with the number
+        of subjects. ``'procrustes'``, kept for backward compatibility,
+        aligns the subjects to each other with orthogonal Procrustes,
+        starting from the first subject and refining against the average
+        of the others, and z-scores the average of the aligned data; its
+        columns are already vertices and are used as they are.
+    weights : list of ndarrays or None, default=None
+        Weights for combining the local templates. Entry ``i`` has one
+        weight per vertex of the ``i``-th searchlight. If None, they are
+        computed from ``sls``: distance-based weights for a `Searchlights`
+        object with distances, uniform weights otherwise. Computed weights
+        sum to 1 for each vertex across the searchlights containing it;
+        supplied weights are used as they are.
+    n_jobs : int, default=1
+        The number of threads computing local templates, following joblib
+        conventions; -1 uses all CPUs. The local templates are combined in
+        a fixed order, so the result does not depend on it.
+    max_blas_threads : int or None, default=1
+        The maximum number of BLAS threads while computing, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+
+    Returns
+    -------
+    tpl : ndarray of shape (n_samples, n_features)
+        The template, with the dtype of ``dms``.
+    """
+    n_jobs = _check_n_jobs(n_jobs)
+    max_blas_threads = _check_max_blas_threads(max_blas_threads)
+    dms = np.asarray(dms)
+    if dms.ndim != 3:
+        raise ValueError(
+            "`dms` must be a 3D array of shape (n_subjects, n_samples, n_features)."
+        )
+    if not np.isfinite(dms).all():
+        raise ValueError("`dms` contains NaN or infinite values.")
+    _check_nv("sls", sls, dms.shape[2])
+    if weights is None:
+        weights = _default_weights(sls)
+    elif len(weights) != len(sls):
+        raise ValueError("`weights` must have one entry per searchlight.")
+
+    def fit(sl, w):
+        if len(sl) == 0:
+            return None
+        w = np.asarray(w)
+        if w.shape != (len(sl),):
+            raise ValueError(
+                "Each entry of `weights` must have one weight per vertex of "
+                "the searchlight."
+            )
+        local = compute_template(
+            dms,
+            sl=sl,
+            kind=kind,
+            max_npc=len(sl),
+            common_topography=kind not in ("procrustes", "cls"),
+        )
+        return local * w[np.newaxis]
+
     tpl = np.zeros_like(dms[0])
-
-    if n_jobs == 1:
-        for sl, w in zip(sls, weights):
-            local_template = compute_template(
-                dms, sl=sl, kind=tpl_kind, max_npc=len(sl), common_topography=True
+    tasks = zip(sls, weights)
+    with threadpool_limits(limits=max_blas_threads):
+        if n_jobs == 1:
+            results = (fit(*task) for task in tasks)
+        else:
+            results = Parallel(n_jobs=n_jobs, prefer="threads", return_as="generator")(
+                delayed(fit)(*task) for task in tasks
             )
-            tpl[:, sl] += local_template * w[np.newaxis]
-    else:
-        with Parallel(n_jobs=n_jobs, batch_size=1, verbose=1) as parallel:
-            local_templates = parallel(
-                delayed(compute_template)(
-                    dms, sl=sl, kind=tpl_kind, max_npc=len(sl), common_topography=True
-                )
-                for sl in sls
-            )
-
-        for local_template, w, sl in zip(local_templates, weights, sls):
-            tpl[:, sl] += local_template * w[np.newaxis]
+        for sl, local in zip(sls, results):
+            if local is not None:
+                tpl[:, sl] += local
     return tpl

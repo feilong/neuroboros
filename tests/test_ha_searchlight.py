@@ -8,7 +8,9 @@ from neuroboros.ha import (
     searchlight_procrustes,
     searchlight_ridge,
     searchlight_ridge_path,
+    searchlight_template,
 )
+from neuroboros.ha.local_template import compute_template
 from neuroboros.ha.procrustes import procrustes
 from neuroboros.ha.ridge import ridge
 
@@ -315,3 +317,118 @@ class TestErrors:
             searchlight_ridge(X, Y[:, :-1], sls, structure=sls.structure())
         with pytest.raises(ValueError, match="Expected a block of shape"):
             searchlight_hyperalignment(X, Y, sls, lambda a, b: np.zeros((2, 2)))
+
+
+def low_rank_dms(rng, ns=3, nt=50, nv=40, rank=5):
+    """Rank-``rank`` data with a nonzero mean, so randomized SVD is exact."""
+    X = rng.standard_normal((nt, rank)) @ rng.standard_normal((rank, ns * nv))
+    return (X + 2.0).reshape(nt, ns, nv).transpose(1, 0, 2)
+
+
+def reference_template(dms, sls, weights, kind="pca"):
+    # PCA templates are mapped to the vertices; Procrustes templates are
+    # already in vertex space and are used as they are.
+    tpl = np.zeros(dms.shape[1:])
+    for sl, w in zip(sls, weights):
+        if len(sl):
+            local = compute_template(
+                dms,
+                sl=sl,
+                kind=kind,
+                max_npc=len(sl),
+                common_topography=kind == "pca",
+            )
+            tpl[:, sl] += local * w
+    return tpl
+
+
+class TestTemplate:
+    def test_distance_weights(self):
+        rng = np.random.default_rng(13)
+        nv, radius = 40, 10.0
+        sls = make_searchlights(rng, nv)
+        dists = [rng.random(len(sl)) * radius for sl in sls]
+        sls = nb.Searchlights(sls, dists, radius=radius, nv=nv)
+        dms = low_rank_dms(rng, nv=nv)
+        expected = reference_template(dms, sls, sls.weights())
+        tpl = searchlight_template(dms, sls)
+        assert tpl.shape == dms.shape[1:]
+        np.testing.assert_allclose(tpl, expected, atol=1e-10)
+        # Uncovered vertices stay zero; covered ones do not.
+        covered = np.zeros(nv, dtype=bool)
+        for sl in sls:
+            covered[sl] = True
+        assert not tpl[:, ~covered].any()
+        assert np.abs(tpl[:, covered]).min(axis=0).all()
+
+    @pytest.mark.parametrize("kind", ["pca", "procrustes"])
+    def test_uniform_and_supplied_weights(self, kind):
+        rng = np.random.default_rng(14)
+        nv = 40
+        sls = make_searchlights(rng, nv)
+        dms = low_rank_dms(rng, nv=nv)
+        counts = np.zeros(nv)
+        for sl in sls:
+            counts[sl] += 1
+        uniform = [1.0 / counts[sl] for sl in sls]
+        np.testing.assert_allclose(
+            searchlight_template(dms, sls, kind=kind),
+            reference_template(dms, sls, uniform, kind),
+            atol=1e-10,
+        )
+        weights = [rng.random(len(sl)) * 3 for sl in sls]
+        np.testing.assert_allclose(
+            searchlight_template(dms, sls, kind=kind, weights=weights),
+            reference_template(dms, sls, weights, kind),
+            atol=1e-10,
+        )
+
+    def test_threads_and_dtype(self):
+        rng = np.random.default_rng(15)
+        sls = make_searchlights(rng, nv=40)
+        dms = low_rank_dms(rng)
+        serial = searchlight_template(dms, sls)
+        for n_jobs in (2, -1):
+            np.testing.assert_array_equal(
+                searchlight_template(dms, sls, n_jobs=n_jobs), serial
+            )
+        # The BLAS thread count may change the rounding, not the result.
+        np.testing.assert_allclose(
+            searchlight_template(dms, sls, n_jobs=2, max_blas_threads=None),
+            serial,
+            rtol=1e-9,
+        )
+        single = searchlight_template(dms.astype(np.float32), sls)
+        assert single.dtype == np.float32
+        np.testing.assert_allclose(single, serial, rtol=1e-4, atol=1e-4)
+
+    def test_errors(self):
+        rng = np.random.default_rng(16)
+        nv = 40
+        sls = make_searchlights(rng, nv)
+        dms = low_rank_dms(rng, nv=nv)
+        cases = [
+            (dict(n_jobs=0), ValueError, "nonzero"),
+            (dict(max_blas_threads=0), ValueError, "max_blas_threads"),
+            (
+                dict(weights=[np.ones(len(sl)) for sl in sls][:-1]),
+                ValueError,
+                "one entry",
+            ),
+            (
+                dict(weights=[np.ones(len(sl) + 1) for sl in sls]),
+                ValueError,
+                "one weight per vertex",
+            ),
+        ]
+        for kwargs, error, match in cases:
+            with pytest.raises(error, match=match):
+                searchlight_template(dms, sls, **kwargs)
+        with pytest.raises(ValueError, match="3D"):
+            searchlight_template(dms[0], sls)
+        with pytest.raises(ValueError, match="NaN"):
+            searchlight_template(np.where(dms > 5, np.nan, dms), sls)
+        with pytest.raises(ValueError, match="defined for 40 vertices"):
+            searchlight_template(dms[:, :, :-1], nb.Searchlights(sls, nv=nv))
+        with pytest.raises(TypeError):
+            searchlight_template(dms, sls, np.ones(nv), 10.0)
