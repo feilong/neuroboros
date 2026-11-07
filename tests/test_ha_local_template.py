@@ -5,10 +5,10 @@ from scipy.stats import zscore
 
 from neuroboros.ha import local_template
 from neuroboros.ha.local_template import (
-    PCA_decomposition,
-    compute_PCA_template,
-    compute_PCA_var1_template,
-    compute_PCA_var2_template,
+    pca_decomposition,
+    compute_pca_template,
+    compute_pca_var1_template,
+    compute_pca_var2_template,
     compute_procrustes_template,
     compute_template,
 )
@@ -34,28 +34,32 @@ def assert_equal_up_to_sign(a, b, **kwargs):
 
 
 class TestPCADecomposition:
-    @pytest.mark.parametrize("flavor", ["sklearn", "svd"])
-    def test_nonzero_mean_not_removed(self, flavor):
+    @pytest.mark.parametrize("solver", ["randomized", "full"])
+    def test_nonzero_mean_not_removed(self, solver):
         rng = np.random.default_rng(0)
         dss = low_rank_dss(rng)
-        XX, cc = PCA_decomposition(dss, max_npc=6, flavor=flavor)
-        ref_XX, ref_cc = uncentered_svd(dss, 6)
-        assert XX.shape == (50, 6) and cc.shape == (6, 3, 20)
-        assert_equal_up_to_sign(XX, ref_XX, atol=1e-8)
-        assert_equal_up_to_sign(cc, ref_cc, atol=1e-8)
+        scores, loadings = pca_decomposition(dss, max_components=6, solver=solver)
+        ref_scores, ref_loadings = uncentered_svd(dss, 6)
+        assert scores.shape == (50, 6) and loadings.shape == (6, 3, 20)
+        assert_equal_up_to_sign(scores, ref_scores, atol=1e-8)
+        assert_equal_up_to_sign(loadings, ref_loadings, atol=1e-8)
         # Centering would give a different decomposition.
         X = dss.transpose(1, 0, 2).reshape(50, 60)
         centered = svd_pca(X)[:, :6]
-        assert not np.allclose(np.abs(XX), np.abs(centered), atol=1e-3)
+        assert not np.allclose(np.abs(scores), np.abs(centered), atol=1e-3)
 
-    @pytest.mark.parametrize("flavor", ["sklearn", "svd"])
-    def test_adjust_ns(self, flavor):
+    @pytest.mark.parametrize("solver", ["randomized", "full"])
+    def test_normalize_subjects(self, solver):
         rng = np.random.default_rng(1)
         dss = low_rank_dss(rng)
-        XX, cc = PCA_decomposition(dss, max_npc=5, flavor=flavor, adjust_ns=False)
-        XX_adj, cc_adj = PCA_decomposition(dss, max_npc=5, flavor=flavor, adjust_ns=True)
-        np.testing.assert_allclose(XX_adj, XX / np.sqrt(3), atol=1e-8)
-        np.testing.assert_array_equal(cc_adj, cc)
+        scores, loadings = pca_decomposition(
+            dss, max_components=5, solver=solver, normalize_subjects=False
+        )
+        scores_adj, loadings_adj = pca_decomposition(
+            dss, max_components=5, solver=solver, normalize_subjects=True
+        )
+        np.testing.assert_allclose(scores_adj, scores / np.sqrt(3), atol=1e-8)
+        np.testing.assert_array_equal(loadings_adj, loadings)
 
     def test_linalg_error_falls_back_to_svd(self, monkeypatch):
         rng = np.random.default_rng(2)
@@ -67,16 +71,20 @@ class TestPCADecomposition:
             raise LinAlgError("forced")
 
         monkeypatch.setattr(local_template, "randomized_svd", failing_randomized_svd)
-        XX, cc = PCA_decomposition(dss, max_npc=5, flavor="sklearn", adjust_ns=True)
-        ref_XX, ref_cc = PCA_decomposition(dss, max_npc=5, flavor="svd", adjust_ns=True)
+        scores, loadings = pca_decomposition(
+            dss, max_components=5, solver="randomized", normalize_subjects=True
+        )
+        ref_scores, ref_loadings = pca_decomposition(
+            dss, max_components=5, solver="full", normalize_subjects=True
+        )
         assert calls == [1]
-        np.testing.assert_array_equal(XX, ref_XX)
-        np.testing.assert_array_equal(cc, ref_cc)
+        np.testing.assert_array_equal(scores, ref_scores)
+        np.testing.assert_array_equal(loadings, ref_loadings)
 
-    def test_unknown_flavor(self):
+    def test_unknown_solver(self):
         rng = np.random.default_rng(3)
         with pytest.raises(NotImplementedError):
-            PCA_decomposition(low_rank_dss(rng), flavor="other")
+            pca_decomposition(low_rank_dss(rng), solver="other")
 
 
 class TestTemplates:
@@ -85,22 +93,24 @@ class TestTemplates:
         rng = np.random.default_rng(0)
         dss = zscore(rng.standard_normal((1, 200, 100)), axis=1)
         dss = np.tile(dss, (10, 1, 1))
-        XX0 = compute_PCA_template(dss)
-        XX1 = compute_PCA_var1_template(dss)
-        XX2 = compute_PCA_var2_template(dss)
-        np.testing.assert_allclose(XX0, XX1, atol=1e-7)
-        np.testing.assert_allclose(XX0, XX2, atol=1e-7)
-        XX3 = compute_procrustes_template(dss)
-        np.testing.assert_allclose(dss[0], XX3, atol=1e-7)
-        assert_equal_up_to_sign(XX0[:, :100], svd_pca(XX3), atol=1e-7)
+        scores0 = compute_pca_template(dss)
+        scores1 = compute_pca_var1_template(dss)
+        scores2 = compute_pca_var2_template(dss)
+        np.testing.assert_allclose(scores0, scores1, atol=1e-7)
+        np.testing.assert_allclose(scores0, scores2, atol=1e-7)
+        scores3 = compute_procrustes_template(dss)
+        np.testing.assert_allclose(dss[0], scores3, atol=1e-7)
+        assert_equal_up_to_sign(scores0[:, :100], svd_pca(scores3), atol=1e-7)
 
     @pytest.mark.parametrize("kind", ["pca", "pcav1", "pcav2"])
     def test_compute_template_pca_kinds(self, kind):
         rng = np.random.default_rng(4)
         dss = low_rank_dss(rng)
         sl = np.arange(5, 15)
-        tpl = compute_template(dss, sl=sl, kind=kind, max_npc=4)
+        tpl = compute_template(dss, sl=sl, kind=kind, max_components=4)
         assert tpl.shape == (50, 4)
-        tpl = compute_template(dss, sl=sl, kind=kind, max_npc=4, common_topography=True)
+        tpl = compute_template(
+            dss, sl=sl, kind=kind, max_components=4, common_topography=True
+        )
         assert tpl.shape == (50, 10)
         assert np.isfinite(tpl).all()

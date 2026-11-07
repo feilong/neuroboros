@@ -7,218 +7,229 @@ from ..linalg import safe_svd
 from .procrustes import procrustes
 
 
-def PCA_decomposition(dss, max_npc=None, flavor="sklearn", adjust_ns=False):
+def pca_decomposition(
+    dms, max_components=None, solver="randomized", normalize_subjects=False
+):
     """Decompose concatenated data matrices using SVD.
 
     Column means are not removed before decomposition.
 
     Parameters
     ----------
-    dss : ndarray of shape (ns, nt, nv)
-    max_npc : integer or None
-    flavor : {'sklearn', 'svd'}
-        'sklearn' uses randomized SVD, 'svd' uses full SVD.
-    adjust_ns : bool
+    dms : ndarray of shape (n_subjects, n_samples, n_features)
+    max_components : integer or None
+    solver : {'randomized', 'full'}
+        'randomized' uses randomized SVD, 'full' uses full SVD.
+    normalize_subjects : bool
         Whether to adjust the variance of the output so that it doesn't increase with the number of subjects.
 
     Returns
     -------
-    XX : ndarray of shape (nt, npc)
-    cc : ndarray of shape (npc, ns, nv)
+    scores : ndarray of shape (n_samples, n_components)
+    loadings : ndarray of shape (n_components, n_subjects, n_features)
     """
-    ns, nt, nv = dss.shape
-    X = dss.transpose(1, 0, 2).reshape(nt, ns * nv)
-    if max_npc is not None:
-        max_npc = min(max_npc, min(X.shape[0], X.shape[1]))
-    if flavor == "sklearn":
+    ns, nt, nv = dms.shape
+    X = dms.transpose(1, 0, 2).reshape(nt, ns * nv)
+    if max_components is not None:
+        max_components = min(max_components, min(X.shape[0], X.shape[1]))
+    if solver == "randomized":
         try:
             U, s, Vt = randomized_svd(
                 X,
-                (max_npc if max_npc is not None else min(X.shape)),
+                (max_components if max_components is not None else min(X.shape)),
                 random_state=0,
             )
         except LinAlgError:
-            return PCA_decomposition(
-                dss, max_npc=max_npc, flavor="svd", adjust_ns=adjust_ns
+            return pca_decomposition(
+                dms,
+                max_components=max_components,
+                solver="full",
+                normalize_subjects=normalize_subjects,
             )
-    elif flavor == "svd":
+    elif solver == "full":
         U, s, Vt = safe_svd(X, remove_mean=False)
     else:
         raise NotImplementedError
-    XX = U[:, :max_npc] * s[np.newaxis, :max_npc]
-    if adjust_ns:
-        XX /= np.sqrt(ns)
-    cc = Vt[:max_npc].reshape(-1, ns, nv)
-    return XX, cc
+    scores = U[:, :max_components] * s[np.newaxis, :max_components]
+    if normalize_subjects:
+        scores /= np.sqrt(ns)
+    loadings = Vt[:max_components].reshape(-1, ns, nv)
+    return scores, loadings
 
 
-def compute_PCA_template(dss, sl=None, max_npc=None, flavor="sklearn"):
+def compute_pca_template(dms, sl=None, max_components=None, solver="randomized"):
     if sl is not None:
-        dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=True)
-    return XX
+        dms = dms[:, :, sl]
+    scores, loadings = pca_decomposition(
+        dms, max_components=max_components, solver=solver, normalize_subjects=True
+    )
+    return scores
 
 
-def compute_PCA_var1_template(dss, sl=None, max_npc=None, flavor="sklearn"):
+def compute_pca_var1_template(dms, sl=None, max_components=None, solver="randomized"):
     if sl is not None:
-        dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=False)
-    w = np.sqrt(np.sum(cc**2, axis=2)).mean(axis=1)
-    XX *= w[np.newaxis]
-    return XX
+        dms = dms[:, :, sl]
+    scores, loadings = pca_decomposition(
+        dms, max_components=max_components, solver=solver, normalize_subjects=False
+    )
+    w = np.sqrt(np.sum(loadings**2, axis=2)).mean(axis=1)
+    scores *= w[np.newaxis]
+    return scores
 
 
-def compute_PCA_var2_template(dss, sl=None, max_npc=None, flavor="sklearn"):
+def compute_pca_var2_template(dms, sl=None, max_components=None, solver="randomized"):
     if sl is not None:
-        dss = dss[:, :, sl]
-    XX, cc = PCA_decomposition(dss, max_npc=max_npc, flavor=flavor, adjust_ns=False)
-    # w = np.sqrt(np.sum(cc**2, axis=2)).mean(axis=1)
-    w = np.exp(0.5 * np.log(np.sum(cc**2, axis=2)).mean(axis=1))
-    XX *= w[np.newaxis]
-    return XX
+        dms = dms[:, :, sl]
+    scores, loadings = pca_decomposition(
+        dms, max_components=max_components, solver=solver, normalize_subjects=False
+    )
+    # w = np.sqrt(np.sum(loadings**2, axis=2)).mean(axis=1)
+    w = np.exp(0.5 * np.log(np.sum(loadings**2, axis=2)).mean(axis=1))
+    scores *= w[np.newaxis]
+    return scores
 
 
-def compute_GPA_template(
-    dss,
+def compute_gpa_template(
+    dms,
     sl=None,
     reflection=True,
     scaling=False,
     zscore_common=True,
-    level2_iter=1,
-    dss2=None,
+    n_refinement_iters=1,
+    dms2=None,
     **kwargs
 ):
     if sl is not None:
-        dss = dss[:, :, sl]
+        dms = dms[:, :, sl]
 
-    common_space = np.mean(dss, axis=0)
+    common_space = np.mean(dms, axis=0)
     if zscore_common:
         common_space = np.nan_to_num(zscore(common_space, axis=0))
 
-    aligned_dss = []
-    for ds in dss:
-        T = procrustes(ds, common_space, reflection=reflection, scaling=scaling)
-        aligned_ds = ds.dot(T)
+    aligned_dms = []
+    for dm in dms:
+        T = procrustes(dm, common_space, reflection=reflection, scaling=scaling)
+        aligned_dm = dm.dot(T)
         if zscore_common:
-            aligned_ds = np.nan_to_num(zscore(aligned_ds, axis=0))
-            aligned_dss.append(aligned_ds)
+            aligned_dm = np.nan_to_num(zscore(aligned_dm, axis=0))
+            aligned_dms.append(aligned_dm)
 
-    aligned_dss2 = []
-    for level2 in range(level2_iter):
-        common_space = np.zeros_like(dss[0])
-        for ds in aligned_dss:
-            common_space += ds
-        for i, ds in enumerate(dss):
-            reference = (common_space - aligned_dss[i]) / float(len(dss) - 1)
+    aligned_dms2 = []
+    for iteration in range(n_refinement_iters):
+        common_space = np.zeros_like(dms[0])
+        for dm in aligned_dms:
+            common_space += dm
+        for i, dm in enumerate(dms):
+            reference = (common_space - aligned_dms[i]) / float(len(dms) - 1)
             if zscore_common:
                 reference = np.nan_to_num(zscore(reference, axis=0))
-            T = procrustes(ds, reference, reflection=reflection, scaling=scaling)
-            if level2 == level2_iter - 1 and dss2 is not None:
-                aligned_dss2.append(dss2[i].dot(T))
-            aligned_dss[i] = ds.dot(T)
+            T = procrustes(dm, reference, reflection=reflection, scaling=scaling)
+            if iteration == n_refinement_iters - 1 and dms2 is not None:
+                aligned_dms2.append(dms2[i].dot(T))
+            aligned_dms[i] = dm.dot(T)
 
-    common_space = np.sum(aligned_dss, axis=0)
+    common_space = np.sum(aligned_dms, axis=0)
     if zscore_common:
         common_space = np.nan_to_num(zscore(common_space, axis=0))
     else:
-        common_space /= float(len(dss))
-    if dss2 is not None:
-        common_space2 = np.zeros_like(dss2[0])
-        for ds in aligned_dss2:
-            common_space2 += ds
+        common_space /= float(len(dms))
+    if dms2 is not None:
+        common_space2 = np.zeros_like(dms2[0])
+        for dm in aligned_dms2:
+            common_space2 += dm
         if zscore_common:
             common_space2 = np.nan_to_num(zscore(common_space2, axis=0))
         else:
-            common_space2 /= float(len(dss))
+            common_space2 /= float(len(dms))
         return common_space, common_space2
 
     return common_space
 
 
 def compute_procrustes_template(
-    dss,
+    dms,
     sl=None,
     reflection=True,
     scaling=False,
     zscore_common=True,
-    level2_iter=1,
-    dss2=None,
+    n_refinement_iters=1,
+    dms2=None,
     **kwargs
 ):
     if sl is not None:
-        dss = dss[:, :, sl]
-    common_space = np.copy(dss[0])
-    aligned_dss = [dss[0]]
-    for ds in dss[1:]:
-        T = procrustes(ds, common_space, reflection=reflection, scaling=scaling)
-        aligned_ds = ds.dot(T)
+        dms = dms[:, :, sl]
+    common_space = np.copy(dms[0])
+    aligned_dms = [dms[0]]
+    for dm in dms[1:]:
+        T = procrustes(dm, common_space, reflection=reflection, scaling=scaling)
+        aligned_dm = dm.dot(T)
         if zscore_common:
-            aligned_ds = np.nan_to_num(zscore(aligned_ds, axis=0))
-        aligned_dss.append(aligned_ds)
-        common_space = (common_space + aligned_ds) * 0.5
+            aligned_dm = np.nan_to_num(zscore(aligned_dm, axis=0))
+        aligned_dms.append(aligned_dm)
+        common_space = (common_space + aligned_dm) * 0.5
         if zscore_common:
             common_space = np.nan_to_num(zscore(common_space, axis=0))
 
-    aligned_dss2 = []
-    for level2 in range(level2_iter):
-        common_space = np.zeros_like(dss[0])
-        for ds in aligned_dss:
-            common_space += ds
-        for i, ds in enumerate(dss):
-            reference = (common_space - aligned_dss[i]) / float(len(dss) - 1)
+    aligned_dms2 = []
+    for iteration in range(n_refinement_iters):
+        common_space = np.zeros_like(dms[0])
+        for dm in aligned_dms:
+            common_space += dm
+        for i, dm in enumerate(dms):
+            reference = (common_space - aligned_dms[i]) / float(len(dms) - 1)
             if zscore_common:
                 reference = np.nan_to_num(zscore(reference, axis=0))
-            T = procrustes(ds, reference, reflection=reflection, scaling=scaling)
-            if level2 == level2_iter - 1 and dss2 is not None:
-                aligned_dss2.append(dss2[i].dot(T))
-            aligned_dss[i] = ds.dot(T)
+            T = procrustes(dm, reference, reflection=reflection, scaling=scaling)
+            if iteration == n_refinement_iters - 1 and dms2 is not None:
+                aligned_dms2.append(dms2[i].dot(T))
+            aligned_dms[i] = dm.dot(T)
 
-    # common_space = np.zeros_like(dss[0])
-    # for ds in aligned_dss:
-    #     common_space += ds
-    common_space = np.sum(aligned_dss, axis=0)
+    # common_space = np.zeros_like(dms[0])
+    # for dm in aligned_dms:
+    #     common_space += dm
+    common_space = np.sum(aligned_dms, axis=0)
     if zscore_common:
         common_space = np.nan_to_num(zscore(common_space, axis=0))
     else:
-        common_space /= float(len(dss))
-    if dss2 is not None:
-        common_space2 = np.zeros_like(dss2[0])
-        for ds in aligned_dss2:
-            common_space2 += ds
+        common_space /= float(len(dms))
+    if dms2 is not None:
+        common_space2 = np.zeros_like(dms2[0])
+        for dm in aligned_dms2:
+            common_space2 += dm
         if zscore_common:
             common_space2 = np.nan_to_num(zscore(common_space2, axis=0))
         else:
-            common_space2 /= float(len(dss))
+            common_space2 /= float(len(dms))
         return common_space, common_space2
 
     return common_space
 
 
 def compute_template(
-    dss, sl=None, kind="procrustes", max_npc=None, common_topography=False
+    dms, sl=None, kind="procrustes", max_components=None, common_topography=False
 ):
     mapping = {
-        "pca": compute_PCA_template,
-        "pcav1": compute_PCA_var1_template,
-        "pcav2": compute_PCA_var2_template,
+        "pca": compute_pca_template,
+        "pcav1": compute_pca_var1_template,
+        "pcav2": compute_pca_var2_template,
         "cls": compute_procrustes_template,
     }
     if kind == "procrustes":
-        tmpl = compute_procrustes_template(
-            dss=dss, sl=sl, reflection=True, scaling=False, zscore_common=True
+        tpl = compute_procrustes_template(
+            dms=dms, sl=sl, reflection=True, scaling=False, zscore_common=True
         )
     elif kind in mapping:
-        tmpl = mapping[kind](dss=dss, sl=sl, max_npc=max_npc)
+        tpl = mapping[kind](dms=dms, sl=sl, max_components=max_components)
     else:
         raise ValueError
 
     if common_topography:
         if sl is not None:
-            dss = dss[:, :, sl]
-        ns, nt, nv = dss.shape
-        T = procrustes(np.tile(tmpl, (ns, 1)), dss.reshape(ns * nt, nv))
-        tmpl = tmpl @ T
-    return tmpl
+            dms = dms[:, :, sl]
+        ns, nt, nv = dms.shape
+        T = procrustes(np.tile(tpl, (ns, 1)), dms.reshape(ns * nt, nv))
+        tpl = tpl @ T
+    return tpl
 
 
 if __name__ == "__main__":
@@ -227,15 +238,15 @@ if __name__ == "__main__":
     from ..linalg.base import svd_pca
 
     rng = np.random.default_rng(0)
-    dss = rng.standard_normal((1, 200, 100))
-    dss = zscore(dss, axis=1)
-    dss = np.tile(dss, (10, 1, 1))
-    XX0 = compute_PCA_template(dss)
-    XX1 = compute_PCA_var1_template(dss)
-    XX2 = compute_PCA_var2_template(dss)
-    np.testing.assert_allclose(XX0, XX1, atol=1e-7)
-    np.testing.assert_allclose(XX0, XX2, atol=1e-7)
-    XX3 = compute_procrustes_template(dss)
-    np.testing.assert_allclose(dss[0], XX3, atol=1e-7)
-    XX3 = svd_pca(XX3)
-    np.testing.assert_allclose(np.abs(XX0[:, :100]), np.abs(XX3), atol=1e-7)
+    dms = rng.standard_normal((1, 200, 100))
+    dms = zscore(dms, axis=1)
+    dms = np.tile(dms, (10, 1, 1))
+    scores0 = compute_pca_template(dms)
+    scores1 = compute_pca_var1_template(dms)
+    scores2 = compute_pca_var2_template(dms)
+    np.testing.assert_allclose(scores0, scores1, atol=1e-7)
+    np.testing.assert_allclose(scores0, scores2, atol=1e-7)
+    scores3 = compute_procrustes_template(dms)
+    np.testing.assert_allclose(dms[0], scores3, atol=1e-7)
+    scores3 = svd_pca(scores3)
+    np.testing.assert_allclose(np.abs(scores0[:, :100]), np.abs(scores3), atol=1e-7)

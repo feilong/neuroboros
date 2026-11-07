@@ -680,7 +680,7 @@ def searchlight_template(
             dms,
             sl=sl,
             kind=kind,
-            max_npc=len(sl),
+            max_components=len(sl),
             common_topography=kind not in ("procrustes", "cls"),
         )
         return local * w[np.newaxis]

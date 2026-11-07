@@ -335,7 +335,7 @@ def reference_template(dms, sls, weights, kind="pca"):
                 dms,
                 sl=sl,
                 kind=kind,
-                max_npc=len(sl),
+                max_components=len(sl),
                 common_topography=kind == "pca",
             )
             tpl[:, sl] += local * w
