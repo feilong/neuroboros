@@ -607,27 +607,21 @@ def searchlight_template(
     In each searchlight, a local template is computed from the data of all
     subjects with `compute_template`. For ``'pca'``, its columns are
     components rather than vertices, so it is mapped back to the
-    searchlight's vertices by Procrustes alignment to the subjects' data
-    (``common_topography=True``). The local templates are then combined
-    vertex by vertex into one template using ``weights``.
+    searchlight's vertices by Procrustes alignment to the subjects' data.
+    The local templates are then combined vertex by vertex into one
+    template using ``weights``.
 
     Parameters
     ----------
     dms : ndarray of shape (n_subjects, n_samples, n_features)
         The data of the subjects, with samples in correspondence across
-        subjects.
+        subjects. The columns should have zero means; see
+        `compute_template`.
     sls : Searchlights or list of ndarrays
         Each entry holds the indices of the vertices in a searchlight.
     kind : {'pca', 'procrustes'}, default='pca'
-        The kind of local template computed by `compute_template`.
-        ``'pca'`` takes the principal components of the subjects' data
-        concatenated along vertices, at most as many as the searchlight has
-        vertices, scaled so that the variance does not grow with the number
-        of subjects. ``'procrustes'``, kept for backward compatibility,
-        aligns the subjects to each other with orthogonal Procrustes,
-        starting from the first subject and refining against the average
-        of the others, and z-scores the average of the aligned data; its
-        columns are already vertices and are used as they are.
+        The kind of local template; see `compute_template`. ``'pca'``
+        keeps at most as many components as the searchlight has vertices.
     weights : list of ndarrays or None, default=None
         Weights for combining the local templates. Entry ``i`` has one
         weight per vertex of the ``i``-th searchlight. If None, they are
@@ -676,13 +670,7 @@ def searchlight_template(
                 "Each entry of `weights` must have one weight per vertex of "
                 "the searchlight."
             )
-        local = compute_template(
-            dms,
-            sl=sl,
-            kind=kind,
-            max_components=len(sl),
-            common_topography=kind not in ("procrustes", "cls"),
-        )
+        local = compute_template(dms, sl, kind=kind, max_components=len(sl))
         return local * w[np.newaxis]
 
     tpl = np.zeros_like(dms[0])

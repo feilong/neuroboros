@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from scipy.linalg import LinAlgError
@@ -9,6 +11,7 @@ from neuroboros.ha.local_template import (
     compute_pca_template,
     compute_pca_var1_template,
     compute_pca_var2_template,
+    compute_gpa_template,
     compute_procrustes_template,
     compute_template,
 )
@@ -20,6 +23,11 @@ def low_rank_dss(rng, ns=3, nt=50, nv=20, rank=5, offset=2.0):
     X = rng.standard_normal((nt, rank)) @ rng.standard_normal((rank, ns * nv))
     X += offset
     return X.reshape(nt, ns, nv).transpose(1, 0, 2)
+
+
+def centered(dss):
+    """Remove the column means of each subject."""
+    return dss - dss.mean(axis=1, keepdims=True)
 
 
 def uncentered_svd(dss, npc):
@@ -83,7 +91,7 @@ class TestPCADecomposition:
 
     def test_unknown_solver(self):
         rng = np.random.default_rng(3)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ValueError, match="solver"):
             pca_decomposition(low_rank_dss(rng), solver="other")
 
 
@@ -102,15 +110,85 @@ class TestTemplates:
         np.testing.assert_allclose(dss[0], scores3, atol=1e-7)
         assert_equal_up_to_sign(scores0[:, :100], svd_pca(scores3), atol=1e-7)
 
-    @pytest.mark.parametrize("kind", ["pca", "pcav1", "pcav2"])
-    def test_compute_template_pca_kinds(self, kind):
-        rng = np.random.default_rng(4)
-        dss = low_rank_dss(rng)
-        sl = np.arange(5, 15)
-        tpl = compute_template(dss, sl=sl, kind=kind, max_components=4)
-        assert tpl.shape == (50, 4)
-        tpl = compute_template(
-            dss, sl=sl, kind=kind, max_components=4, common_topography=True
-        )
-        assert tpl.shape == (50, 10)
+    @pytest.mark.parametrize(
+        "func", [compute_procrustes_template, compute_gpa_template]
+    )
+    def test_procrustes_templates_without_zscore(self, func):
+        rng = np.random.default_rng(9)
+        dss = centered(low_rank_dss(rng))
+        tpl = func(dss, zscore_common=False)
+        assert tpl.shape == dss.shape[1:]
         assert np.isfinite(tpl).all()
+        # The test template of the training data is the template itself.
+        tpl2 = func(dss, zscore_common=False, dms2=dss)[1]
+        np.testing.assert_allclose(tpl2, tpl, atol=1e-10)
+
+    def test_compute_template_pca(self):
+        rng = np.random.default_rng(4)
+        dss = centered(low_rank_dss(rng))
+        sl = np.arange(5, 15)
+        components = compute_template(
+            dss, sl=sl, kind="pca", max_components=4, common_topography=False
+        )
+        assert components.shape == (50, 4)
+        assert_equal_up_to_sign(
+            components, compute_pca_template(dss, sl=sl, max_components=4), atol=1e-10
+        )
+        # By default, PCA templates are mapped onto the features by the
+        # orthogonal transform closest to the subjects' data.
+        tpl = compute_template(dss, sl=sl, max_components=4)
+        assert tpl.shape == (50, 10)
+        np.testing.assert_allclose(
+            tpl, compute_template(dss, sl=sl, max_components=4, common_topography=True)
+        )
+        U, s, Vt = np.linalg.svd(
+            components.T @ dss[:, :, sl].sum(axis=0), full_matrices=False
+        )
+        np.testing.assert_allclose(components @ (U @ Vt), tpl, atol=1e-10)
+
+    def test_compute_template_procrustes(self):
+        rng = np.random.default_rng(5)
+        dss = centered(low_rank_dss(rng))
+        sl = np.arange(5, 15)
+        # By default, Procrustes templates are used as computed.
+        tpl = compute_template(dss, sl=sl, kind="procrustes")
+        np.testing.assert_allclose(
+            tpl, compute_procrustes_template(dss, sl=sl), atol=1e-12
+        )
+        rotated = compute_template(
+            dss, sl=sl, kind="procrustes", common_topography=True
+        )
+        assert rotated.shape == tpl.shape
+        assert not np.allclose(rotated, tpl)
+
+    def test_compute_template_unknown_kind(self):
+        rng = np.random.default_rng(6)
+        with pytest.raises(ValueError, match="'cls'"):
+            compute_template(low_rank_dss(rng), kind="cls")
+
+    @pytest.mark.parametrize("kind", ["pca", "procrustes"])
+    def test_compute_template_warns_when_not_centered(self, kind):
+        rng = np.random.default_rng(7)
+        dss = low_rank_dss(rng)
+        with pytest.warns(UserWarning, match="zero means"):
+            compute_template(dss, kind=kind)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compute_template(centered(dss), kind=kind)
+            # Zero columns are centered.
+            compute_template(np.zeros_like(dss), kind=kind, common_topography=False)
+        # Only the selected features are checked.
+        partial = centered(dss)
+        partial[:, :, 10:] += 2.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compute_template(partial, sl=np.arange(5), kind=kind)
+        with pytest.warns(UserWarning, match="zero means"):
+            compute_template(partial, sl=np.arange(5, 15), kind=kind)
+
+    @pytest.mark.parametrize("dtype, value", [(np.int16, 100), (np.float32, 1e20)])
+    def test_centering_check_does_not_overflow(self, dtype, value):
+        # Squares that overflow the input dtype must not hide the warning.
+        dss = np.full((2, 20, 6), value, dtype=dtype)
+        with pytest.warns(UserWarning, match="zero means"):
+            compute_template(dss, kind="pca", common_topography=False)

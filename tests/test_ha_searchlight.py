@@ -320,9 +320,10 @@ class TestErrors:
 
 
 def low_rank_dms(rng, ns=3, nt=50, nv=40, rank=5):
-    """Rank-``rank`` data with a nonzero mean, so randomized SVD is exact."""
+    """Centered rank-``rank`` data, so randomized SVD is exact."""
     X = rng.standard_normal((nt, rank)) @ rng.standard_normal((rank, ns * nv))
-    return (X + 2.0).reshape(nt, ns, nv).transpose(1, 0, 2)
+    dms = X.reshape(nt, ns, nv).transpose(1, 0, 2)
+    return dms - dms.mean(axis=1, keepdims=True)
 
 
 def reference_template(dms, sls, weights, kind="pca"):
@@ -427,7 +428,7 @@ class TestTemplate:
         with pytest.raises(ValueError, match="3D"):
             searchlight_template(dms[0], sls)
         with pytest.raises(ValueError, match="NaN"):
-            searchlight_template(np.where(dms > 5, np.nan, dms), sls)
+            searchlight_template(np.r_[dms[:-1], [np.full(dms.shape[1:], np.nan)]], sls)
         with pytest.raises(ValueError, match="defined for 40 vertices"):
             searchlight_template(dms[:, :, :-1], nb.Searchlights(sls, nv=nv))
         with pytest.raises(TypeError):
