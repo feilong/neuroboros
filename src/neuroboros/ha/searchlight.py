@@ -8,7 +8,7 @@ from threadpoolctl import threadpool_limits
 
 from .local_template import compute_template
 from .procrustes import procrustes
-from .ridge import ridge
+from .ridge import _check_alphas, ridge_path
 from .transform import Transform
 
 
@@ -313,14 +313,14 @@ def searchlight_hyperalignment(
         conventions; -1 uses all CPUs. The local transforms are combined in a
         fixed order, so the result does not depend on it as long as
         ``sl_func`` is deterministic and safe to call from several
-        threads at once. With more than one thread, including negative
-        ``n_jobs`` values, BLAS threads are limited to ``max_blas_threads``.
+        threads at once.
     max_blas_threads : int or None, default=1
-        The maximum number of BLAS threads while fitting, set with
-        threadpoolctl; None keeps the current setting. One thread avoids
-        oversubscription with several ``n_jobs`` and makes the result
-        reproducible. It has no effect on Apple's Accelerate, which only
-        the ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+        The maximum number of BLAS threads while fitting, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
 
     Returns
     -------
@@ -392,15 +392,14 @@ def searchlight_procrustes(
     n_jobs : int, default=1
         The number of threads fitting local models, following joblib
         conventions; -1 uses all CPUs. The local transforms are combined in a
-        fixed order, so the result does not depend on it. With more than
-        one thread, including negative ``n_jobs`` values, BLAS threads are
-        limited to ``max_blas_threads``.
+        fixed order, so the result does not depend on it.
     max_blas_threads : int or None, default=1
-        The maximum number of BLAS threads while fitting, set with
-        threadpoolctl; None keeps the current setting. One thread avoids
-        oversubscription with several ``n_jobs`` and makes the result
-        reproducible. It has no effect on Apple's Accelerate, which only
-        the ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+        The maximum number of BLAS threads while fitting, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
 
     Returns
     -------
@@ -440,7 +439,8 @@ def searchlight_ridge(
     In each searchlight, the local transform minimizes
     ``||X[:, sl] @ t - Y[:, sl_out]||_F**2 + alpha * ||t||_F**2`` without
     centering, intercept, or scaling, and without dividing ``alpha`` by the
-    number of samples.
+    number of samples. See `searchlight_ridge_path` to fit several values
+    of ``alpha`` without repeating the local decompositions.
 
     Parameters
     ----------
@@ -476,15 +476,14 @@ def searchlight_ridge(
     n_jobs : int, default=1
         The number of threads fitting local models, following joblib
         conventions; -1 uses all CPUs. The local transforms are combined in a
-        fixed order, so the result does not depend on it. With more than
-        one thread, including negative ``n_jobs`` values, BLAS threads are
-        limited to ``max_blas_threads``.
+        fixed order, so the result does not depend on it.
     max_blas_threads : int or None, default=1
-        The maximum number of BLAS threads while fitting, set with
-        threadpoolctl; None keeps the current setting. One thread avoids
-        oversubscription with several ``n_jobs`` and makes the result
-        reproducible. It has no effect on Apple's Accelerate, which only
-        the ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+        The maximum number of BLAS threads while fitting, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
 
     Returns
     -------
@@ -493,11 +492,99 @@ def searchlight_ridge(
         ``X @ xfm`` approximates ``Y``.
     """
     if np.ndim(alpha) != 0:
-        raise ValueError("`alpha` must be a scalar.")
+        raise ValueError(
+            "`alpha` must be a scalar; use `searchlight_ridge_path` for several."
+        )
+    return searchlight_ridge_path(
+        X,
+        Y,
+        sls,
+        [alpha],
+        solver=solver,
+        sls_out=sls_out,
+        weights=weights,
+        structure=structure,
+        n_jobs=n_jobs,
+        max_blas_threads=max_blas_threads,
+    )[0]
+
+
+def searchlight_ridge_path(
+    X,
+    Y,
+    sls,
+    alphas,
+    *,
+    solver="eigh",
+    sls_out=None,
+    weights=None,
+    structure=None,
+    n_jobs=1,
+    max_blas_threads=1,
+):
+    """Searchlight ridge transforms for several regularization strengths.
+
+    The local decomposition is reused across regularization strengths,
+    avoiding repeated decompositions. Each value of ``alphas`` still gets
+    its own transform, so memory grows with their number. See
+    `searchlight_ridge` for the local model.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features_X)
+        The data to be aligned to ``Y``.
+    Y : ndarray of shape (n_samples, n_features_Y)
+        The target of the alignment.
+    sls : Searchlights or list of ndarrays
+        Each entry holds the indices of the vertices in a searchlight.
+    alphas : array-like of shape (n_alphas,)
+        Finite nonnegative regularization strengths. Order and duplicates
+        are preserved.
+    solver : {'eigh', 'svd'}, default='eigh'
+        Solver of the local ridge regressions; see `ridge_path`.
+    sls_out : Searchlights, list of ndarrays or None, default=None
+        Searchlights in the space of ``Y``, if different from ``sls``. Must
+        have the same length as ``sls``; the ``i``-th searchlights of ``sls``
+        and ``sls_out`` are fitted together.
+    weights : list of ndarrays or None, default=None
+        Weights for combining the local transforms. Entry ``i`` has one
+        weight per vertex of the ``i``-th output searchlight. If None, they
+        are computed from the output searchlights (``sls``, or ``sls_out``
+        when given): distance-based weights for a `Searchlights` object
+        with distances, uniform weights otherwise. Computed weights sum to
+        1 for each vertex across the searchlights containing it; supplied
+        weights are used as they are.
+    structure : Transform or None, default=None
+        An all-zero transform with the sparsity structure of the
+        searchlights, e.g., from `Searchlights.structure`,
+        `Transform.from_searchlights` or `Transform.load_structure`. It is
+        copied, not modified. If None, the structure cached on ``sls`` is
+        used when ``sls`` is a `Searchlights` object and the transform is
+        square, and otherwise one is built from the searchlights.
+    n_jobs : int, default=1
+        The number of threads fitting local models, following joblib
+        conventions; -1 uses all CPUs. The local transforms are combined in a
+        fixed order, so the result does not depend on it.
+    max_blas_threads : int or None, default=1
+        The maximum number of BLAS threads while fitting, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+
+    Returns
+    -------
+    xfms : list of Transform
+        One transform per value of ``alphas``, in the same order, each of
+        shape ``(n_features_X, n_features_Y)`` such that ``X @ xfms[i]``
+        approximates ``Y`` with regularization ``alphas[i]``.
+    """
+    alphas = _check_alphas(alphas)
     if solver not in ("eigh", "svd"):
         raise ValueError(f"`solver` must be 'eigh' or 'svd', got {solver!r}.")
-    sl_func = functools.partial(ridge, alpha=alpha, solver=solver)
-    return searchlight_hyperalignment(
+    sl_func = functools.partial(ridge_path, alphas=alphas, solver=solver)
+    return _searchlight_fit(
         X,
         Y,
         sls,
@@ -505,6 +592,7 @@ def searchlight_ridge(
         sls_out=sls_out,
         weights=weights,
         structure=structure,
+        n_models=len(alphas),
         n_jobs=n_jobs,
         max_blas_threads=max_blas_threads,
     )

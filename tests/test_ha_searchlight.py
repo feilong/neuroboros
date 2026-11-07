@@ -7,6 +7,7 @@ from neuroboros.ha import (
     searchlight_hyperalignment,
     searchlight_procrustes,
     searchlight_ridge,
+    searchlight_ridge_path,
 )
 from neuroboros.ha.procrustes import procrustes
 from neuroboros.ha.ridge import ridge
@@ -94,6 +95,98 @@ class TestDefaults:
         xfm.internal_matrix.data[:] = 0
         again = searchlight_ridge(X, Y, sls, structure=xfm)
         assert again.internal_matrix.data.any()
+
+
+class TestRidgePath:
+    @pytest.mark.parametrize("solver", ["eigh", "svd"])
+    def test_matches_augmented_least_squares(self, solver):
+        # Independent reference: ridge as least squares on the augmented
+        # system, with alpha=0 the minimum-norm solution. Rank-5 data makes
+        # the larger searchlights rank deficient.
+        rng = np.random.default_rng(12)
+        nv = 40
+        sls = make_searchlights(rng, nv)
+        X = rng.standard_normal((50, 5)) @ rng.standard_normal((5, nv))
+        Y = rng.standard_normal((50, nv))
+        counts = np.zeros(nv)
+        for sl in sls:
+            counts[sl] += 1
+        weights = [1.0 / counts[sl] for sl in sls]
+        alphas = [0.0, 1.0, 50.0]
+
+        def augmented(a, b, alpha):
+            n = a.shape[1]
+            return lstsq(
+                np.vstack([a, np.sqrt(alpha) * np.eye(n)]),
+                np.vstack([b, np.zeros((n, b.shape[1]))]),
+            )
+
+        xfms = searchlight_ridge_path(X, Y, sls, alphas, solver=solver)
+        for alpha, xfm in zip(alphas, xfms):
+            expected = reference_fit(
+                X, Y, sls, lambda a, b: augmented(a, b, alpha), weights
+            )
+            np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-9)
+
+    def test_matches_single_fits(self):
+        rng = np.random.default_rng(9)
+        nv = 40
+        sls = make_searchlights(rng, nv)
+        dists = [rng.random(len(sl)) * 10 for sl in sls]
+        sls = nb.Searchlights(sls, dists, radius=10, nv=nv)
+        X = rng.standard_normal((50, nv))
+        Y = rng.standard_normal((50, nv))
+        alphas = [0.1, 1e3, 0.1]
+        xfms = searchlight_ridge_path(X, Y, sls, alphas)
+        assert isinstance(xfms, list) and len(xfms) == len(alphas)
+        for alpha, xfm in zip(alphas, xfms):
+            assert isinstance(xfm, Transform)
+            single = searchlight_ridge(X, Y, sls, alpha)
+            np.testing.assert_allclose(
+                xfm.internal_matrix.data, single.internal_matrix.data, rtol=1e-10
+            )
+        # Duplicated alphas give identical, independent transforms.
+        np.testing.assert_array_equal(
+            xfms[0].internal_matrix.data, xfms[2].internal_matrix.data
+        )
+        assert not np.shares_memory(
+            xfms[0].internal_matrix.data, xfms[2].internal_matrix.data
+        )
+        assert not sls.structure().internal_matrix.data.any()
+
+    def test_rectangular_and_threads(self):
+        rng = np.random.default_rng(10)
+        sls = make_searchlights(rng, nv=40)
+        sls_out = [rng.permutation(25)[: len(sl)] for sl in sls]
+        X = rng.standard_normal((50, 40))
+        Y = rng.standard_normal((50, 25))
+        alphas = [1.0, 100.0]
+        serial = searchlight_ridge_path(X, Y, sls, alphas, sls_out=sls_out)
+        threaded = searchlight_ridge_path(
+            X, Y, sls, alphas, sls_out=sls_out, n_jobs=2, solver="svd"
+        )
+        for alpha, a, b in zip(alphas, serial, threaded):
+            assert a.shape == (40, 25)
+            expected = searchlight_ridge(X, Y, sls, alpha, sls_out=sls_out)
+            np.testing.assert_allclose(
+                a.internal_matrix.data, expected.internal_matrix.data, rtol=1e-10
+            )
+            np.testing.assert_allclose(
+                b.internal_matrix.data, expected.internal_matrix.data, rtol=1e-8
+            )
+
+    def test_errors(self):
+        rng = np.random.default_rng(11)
+        sls = make_searchlights(rng, nv=40)
+        X = rng.standard_normal((50, 40))
+        Y = rng.standard_normal((50, 40))
+        for alphas in ([], [[1.0]], [1.0, -1.0], [np.nan], 1.0):
+            with pytest.raises(ValueError, match="nonnegative"):
+                searchlight_ridge_path(X, Y, sls, alphas)
+        with pytest.raises(ValueError, match="solver"):
+            searchlight_ridge_path(X, Y, sls, [1.0], solver="typo")
+        with pytest.raises(ValueError, match="searchlight_ridge_path"):
+            searchlight_ridge(X, Y, sls, [1.0, 2.0])
 
 
 class TestRectangular:
