@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from neuroboros.ha import Transform, searchlight_hyperalignment
+from neuroboros.ha import Transform, searchlight_fit
 import neuroboros as nb
 from neuroboros.ha.sparse import _rcm_order, initialize_sparse_matrix, permute_matrix
 
@@ -77,9 +77,7 @@ class TestTransform:
 
         dense = reference_fit(X, Y, sls, weights=weights)
         xfm0 = Transform.from_searchlights(sls, nv=60, dtype=dtype)
-        xfm = searchlight_hyperalignment(
-            X, Y, sls, lstsq, structure=xfm0, weights=weights
-        )
+        xfm = searchlight_fit(X, Y, sls, lstsq, structure=xfm0, weights=weights)
 
         assert isinstance(xfm, Transform)
         assert xfm.shape == (60, 60)
@@ -102,7 +100,7 @@ class TestTransform:
         weights = [rng.random(len(sl)) for sl in sls_out]
         dense = reference_fit(X, Y, sls, sls_out, weights)
         xfm0 = Transform.from_searchlights(sls, sls_out=sls_out, nv=60, nv_out=40)
-        xfm = searchlight_hyperalignment(
+        xfm = searchlight_fit(
             X, Y, sls, lstsq, sls_out=sls_out, weights=weights, structure=xfm0
         )
         assert xfm.shape == (60, 40)
@@ -169,7 +167,7 @@ def fitted_transform(rng, nv=60):
     X = rng.standard_normal((30, nv))
     Y = rng.standard_normal((30, nv))
     xfm0 = Transform.from_searchlights(sls, nv=nv)
-    return xfm0, searchlight_hyperalignment(X, Y, sls, lstsq, structure=xfm0), X
+    return xfm0, searchlight_fit(X, Y, sls, lstsq, structure=xfm0), X
 
 
 class TestSaveLoad:
@@ -278,10 +276,8 @@ class TestSaveLoad:
         assert structure.dtype == xfm0.dtype
         assert not structure.internal_matrix.data.any()
 
-        xfm = searchlight_hyperalignment(X, Y, sls, lstsq, structure=xfm0)
-        xfm_from_file = searchlight_hyperalignment(
-            X, Y, sls, lstsq, structure=structure
-        )
+        xfm = searchlight_fit(X, Y, sls, lstsq, structure=xfm0)
+        xfm_from_file = searchlight_fit(X, Y, sls, lstsq, structure=structure)
         np.testing.assert_array_equal(
             xfm_from_file.internal_matrix.data, xfm.internal_matrix.data
         )

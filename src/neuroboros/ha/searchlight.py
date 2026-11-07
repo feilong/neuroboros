@@ -6,7 +6,6 @@ import scipy.sparse as sparse
 from joblib import Parallel, delayed
 from threadpoolctl import threadpool_limits
 
-from .local_template import compute_template
 from .procrustes import procrustes
 from .ridge import _check_alphas, ridge_path
 from .transform import Transform
@@ -159,7 +158,7 @@ def _searchlight_fit(
     X,
     Y,
     sls,
-    sl_func,
+    fit_local,
     *,
     sls_out,
     weights,
@@ -170,7 +169,7 @@ def _searchlight_fit(
 ):
     """Fit local models in each searchlight and combine them into transforms.
 
-    ``sl_func(X[:, sl], Y[:, sl_out])`` returns ``n_models`` blocks of shape
+    ``fit_local(X[:, sl], Y[:, sl_out])`` returns ``n_models`` blocks of shape
     ``(len(sl), len(sl_out))``, as a list or a stacked array. Block ``k`` of
     every searchlight, scaled by the searchlight's weights, is added to the
     ``k``-th transform. The transforms are copies of ``structure``.
@@ -222,7 +221,7 @@ def _searchlight_fit(
                 "Each entry of `weights` must have one weight per vertex of "
                 "the output searchlight."
             )
-        blocks = sl_func(X[:, sl_in], Y[:, sl_out])
+        blocks = fit_local(X[:, sl_in], Y[:, sl_out])
         if len(blocks) != n_models:
             raise ValueError(f"Expected {n_models} blocks, got {len(blocks)}.")
         offsets = structure.block_offsets(sl_in, sl_out)
@@ -260,11 +259,11 @@ def _searchlight_fit(
     return mats
 
 
-def searchlight_hyperalignment(
+def searchlight_fit(
     X,
     Y,
     sls,
-    sl_func,
+    fit_local,
     *,
     sls_out=None,
     weights=None,
@@ -274,7 +273,7 @@ def searchlight_hyperalignment(
 ):
     """Searchlight hyperalignment with a custom local model.
 
-    A local transform is fitted in each searchlight with ``sl_func``, and
+    A local transform is fitted in each searchlight with ``fit_local``, and
     the local transforms are combined into one sparse transform using
     ``weights``.
 
@@ -286,8 +285,8 @@ def searchlight_hyperalignment(
         The target of the alignment.
     sls : Searchlights or list of ndarrays
         Each entry holds the indices of the vertices in a searchlight.
-    sl_func : callable
-        ``sl_func(X[:, sl], Y[:, sl_out])`` returns the local transform, an
+    fit_local : callable
+        ``fit_local(X[:, sl], Y[:, sl_out])`` returns the local transform, an
         array of shape ``(len(sl), len(sl_out))``, such that
         ``X[:, sl] @ t`` approximates ``Y[:, sl_out]``.
     sls_out : Searchlights, list of ndarrays or None, default=None
@@ -313,7 +312,7 @@ def searchlight_hyperalignment(
         The number of threads fitting local models, following joblib
         conventions; -1 uses all CPUs. The local transforms are combined in a
         fixed order, so the result does not depend on it as long as
-        ``sl_func`` is deterministic and safe to call from several
+        ``fit_local`` is deterministic and safe to call from several
         threads at once.
     max_blas_threads : int or None, default=1
         The maximum number of BLAS threads while fitting, whatever
@@ -333,7 +332,7 @@ def searchlight_hyperalignment(
         X,
         Y,
         sls,
-        lambda a, b: [sl_func(a, b)],
+        lambda a, b: [fit_local(a, b)],
         sls_out=sls_out,
         weights=weights,
         structure=structure,
@@ -408,12 +407,12 @@ def searchlight_procrustes(
         The transform, of shape ``(n_features_X, n_features_Y)``, such that
         ``X @ xfm`` approximates ``Y``.
     """
-    sl_func = functools.partial(procrustes, reflection=reflection, scaling=scaling)
-    return searchlight_hyperalignment(
+    fit_local = functools.partial(procrustes, reflection=reflection, scaling=scaling)
+    return searchlight_fit(
         X,
         Y,
         sls,
-        sl_func,
+        fit_local,
         sls_out=sls_out,
         weights=weights,
         structure=structure,
@@ -584,12 +583,12 @@ def searchlight_ridge_path(
     alphas = _check_alphas(alphas)
     if solver not in ("eigh", "svd"):
         raise ValueError(f"`solver` must be 'eigh' or 'svd', got {solver!r}.")
-    sl_func = functools.partial(ridge_path, alphas=alphas, solver=solver)
+    fit_local = functools.partial(ridge_path, alphas=alphas, solver=solver)
     return _searchlight_fit(
         X,
         Y,
         sls,
-        sl_func,
+        fit_local,
         sls_out=sls_out,
         weights=weights,
         structure=structure,
@@ -597,92 +596,3 @@ def searchlight_ridge_path(
         n_jobs=n_jobs,
         max_blas_threads=max_blas_threads,
     )
-
-
-def searchlight_template(
-    dms, sls, *, kind="pca", weights=None, n_jobs=1, max_blas_threads=1
-):
-    """Build a template by combining local templates across searchlights.
-
-    In each searchlight, a local template is computed from the data of all
-    subjects with `compute_template`. For ``'pca'``, its columns are
-    components rather than vertices, so it is mapped back to the
-    searchlight's vertices by Procrustes alignment to the subjects' data.
-    The local templates are then combined vertex by vertex into one
-    template using ``weights``.
-
-    Parameters
-    ----------
-    dms : ndarray of shape (n_subjects, n_samples, n_features)
-        The data of the subjects, with samples in correspondence across
-        subjects. The columns should have zero means; see
-        `compute_template`.
-    sls : Searchlights or list of ndarrays
-        Each entry holds the indices of the vertices in a searchlight.
-    kind : {'pca', 'procrustes'}, default='pca'
-        The kind of local template; see `compute_template`. ``'pca'``
-        keeps at most as many components as the searchlight has vertices.
-    weights : list of ndarrays or None, default=None
-        Weights for combining the local templates. Entry ``i`` has one
-        weight per vertex of the ``i``-th searchlight. If None, they are
-        computed from ``sls``: distance-based weights for a `Searchlights`
-        object with distances, uniform weights otherwise. Computed weights
-        sum to 1 for each vertex across the searchlights containing it;
-        supplied weights are used as they are.
-    n_jobs : int, default=1
-        The number of threads computing local templates, following joblib
-        conventions; -1 uses all CPUs. The local templates are combined in
-        a fixed order, so the result does not depend on it.
-    max_blas_threads : int or None, default=1
-        The maximum number of BLAS threads while computing, whatever
-        ``n_jobs`` is, set with threadpoolctl; None keeps the current
-        setting. One thread avoids oversubscription with several ``n_jobs``
-        and reduces numerical variation caused by BLAS threading. It has no
-        effect on Apple's Accelerate, which only the
-        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
-
-    Returns
-    -------
-    tpl : ndarray of shape (n_samples, n_features)
-        The template, with the dtype of ``dms``.
-    """
-    n_jobs = _check_n_jobs(n_jobs)
-    max_blas_threads = _check_max_blas_threads(max_blas_threads)
-    dms = np.asarray(dms)
-    if dms.ndim != 3:
-        raise ValueError(
-            "`dms` must be a 3D array of shape (n_subjects, n_samples, n_features)."
-        )
-    if not np.isfinite(dms).all():
-        raise ValueError("`dms` contains NaN or infinite values.")
-    _check_nv("sls", sls, dms.shape[2])
-    if weights is None:
-        weights = _default_weights(sls)
-    elif len(weights) != len(sls):
-        raise ValueError("`weights` must have one entry per searchlight.")
-
-    def fit(sl, w):
-        if len(sl) == 0:
-            return None
-        w = np.asarray(w)
-        if w.shape != (len(sl),):
-            raise ValueError(
-                "Each entry of `weights` must have one weight per vertex of "
-                "the searchlight."
-            )
-        local = compute_template(dms, sl, kind=kind, max_components=len(sl))
-        return local * w[np.newaxis]
-
-    tpl = np.zeros_like(dms[0])
-    tasks = zip(sls, weights)
-    with threadpool_limits(limits=max_blas_threads):
-        if n_jobs == 1:
-            results = (fit(*task) for task in tasks)
-        else:
-            results = Parallel(n_jobs=n_jobs, prefer="threads", return_as="generator")(
-                delayed(fit)(*task) for task in tasks
-            )
-        for sl, local in zip(sls, results):
-            if local is not None:
-                tpl[:, sl] += local
-    return tpl

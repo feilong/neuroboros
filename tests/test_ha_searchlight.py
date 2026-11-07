@@ -4,13 +4,11 @@ import pytest
 import neuroboros as nb
 from neuroboros.ha import (
     Transform,
-    searchlight_hyperalignment,
+    searchlight_fit,
     searchlight_procrustes,
     searchlight_ridge,
     searchlight_ridge_path,
-    searchlight_template,
 )
-from neuroboros.ha.local_template import compute_template
 from neuroboros.ha.procrustes import procrustes
 from neuroboros.ha.ridge import ridge
 
@@ -24,12 +22,12 @@ def make_searchlights(rng, nv=40, n_sls=15, max_size=9):
     return sls
 
 
-def reference_fit(X, Y, sls, sl_func, weights, sls_out=None):
+def reference_fit(X, Y, sls, fit_local, weights, sls_out=None):
     sls_out = sls if sls_out is None else sls_out
     mat = np.zeros((X.shape[1], Y.shape[1]))
     for sl, sl_out, w in zip(sls, sls_out, weights):
         if len(sl) and len(sl_out):
-            mat[np.ix_(sl, sl_out)] += sl_func(X[:, sl], Y[:, sl_out]) * w
+            mat[np.ix_(sl, sl_out)] += fit_local(X[:, sl], Y[:, sl_out]) * w
     return mat
 
 
@@ -69,7 +67,7 @@ class TestDefaults:
             counts[sl] += 1
         weights = [1.0 / counts[sl] for sl in sls]
         expected = reference_fit(X, Y, sls, lstsq, weights)
-        xfm = searchlight_hyperalignment(X, Y, sls, lstsq)
+        xfm = searchlight_fit(X, Y, sls, lstsq)
         assert isinstance(xfm, Transform)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-12)
 
@@ -81,7 +79,7 @@ class TestDefaults:
         Y = rng.standard_normal((50, nv))
         weights = [rng.random(len(sl)) * 3 for sl in sls]
         expected = reference_fit(X, Y, sls, lstsq, weights)
-        xfm = searchlight_hyperalignment(X, Y, sls, lstsq, weights=weights)
+        xfm = searchlight_fit(X, Y, sls, lstsq, weights=weights)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-12)
 
     def test_structure_must_be_zero(self):
@@ -204,7 +202,7 @@ class TestRectangular:
             counts[sl] += 1
         weights = [1.0 / counts[sl] for sl in sls]
         expected = reference_fit(X, Y, sls, lstsq, weights)
-        xfm = searchlight_hyperalignment(X, Y, sls, lstsq)
+        xfm = searchlight_fit(X, Y, sls, lstsq)
         assert xfm.shape == (40, 55)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-12)
 
@@ -219,13 +217,11 @@ class TestRectangular:
             counts[sl] += 1
         weights = [1.0 / counts[sl] for sl in sls_out]
         expected = reference_fit(X, Y, sls, lstsq, weights, sls_out)
-        xfm = searchlight_hyperalignment(X, Y, sls, lstsq, sls_out=sls_out)
+        xfm = searchlight_fit(X, Y, sls, lstsq, sls_out=sls_out)
         assert xfm.shape == (40, 25)
         np.testing.assert_allclose(xfm.to_scipy().toarray(), expected, atol=1e-12)
         explicit = Transform.from_searchlights(sls, sls_out, nv=40, nv_out=25)
-        xfm2 = searchlight_hyperalignment(
-            X, Y, sls, lstsq, sls_out=sls_out, structure=explicit
-        )
+        xfm2 = searchlight_fit(X, Y, sls, lstsq, sls_out=sls_out, structure=explicit)
         np.testing.assert_allclose(xfm2.to_scipy().toarray(), expected, atol=1e-12)
         # A supplied structure is copied, not filled in, also by the path.
         assert not explicit.internal_matrix.data.any()
@@ -332,120 +328,4 @@ class TestErrors:
         with pytest.raises(ValueError, match="structure.*shape"):
             searchlight_ridge(X, Y[:, :-1], sls, structure=sls.structure())
         with pytest.raises(ValueError, match="Expected a block of shape"):
-            searchlight_hyperalignment(X, Y, sls, lambda a, b: np.zeros((2, 2)))
-
-
-def low_rank_dms(rng, ns=3, nt=50, nv=40, rank=5):
-    """Centered rank-``rank`` data, so randomized SVD is exact."""
-    X = rng.standard_normal((nt, rank)) @ rng.standard_normal((rank, ns * nv))
-    dms = X.reshape(nt, ns, nv).transpose(1, 0, 2)
-    return dms - dms.mean(axis=1, keepdims=True)
-
-
-def reference_template(dms, sls, weights, kind="pca"):
-    # PCA templates are mapped to the vertices; Procrustes templates are
-    # already in vertex space and are used as they are.
-    tpl = np.zeros(dms.shape[1:])
-    for sl, w in zip(sls, weights):
-        if len(sl):
-            local = compute_template(
-                dms,
-                sl=sl,
-                kind=kind,
-                max_components=len(sl),
-                common_topography=kind == "pca",
-            )
-            tpl[:, sl] += local * w
-    return tpl
-
-
-class TestTemplate:
-    def test_distance_weights(self):
-        rng = np.random.default_rng(13)
-        nv, radius = 40, 10.0
-        sls = make_searchlights(rng, nv)
-        dists = [rng.random(len(sl)) * radius for sl in sls]
-        sls = nb.Searchlights(sls, dists, radius=radius, nv=nv)
-        dms = low_rank_dms(rng, nv=nv)
-        expected = reference_template(dms, sls, sls.weights())
-        tpl = searchlight_template(dms, sls)
-        assert tpl.shape == dms.shape[1:]
-        np.testing.assert_allclose(tpl, expected, atol=1e-10)
-        # Uncovered vertices stay zero; covered ones do not.
-        covered = np.zeros(nv, dtype=bool)
-        for sl in sls:
-            covered[sl] = True
-        assert not tpl[:, ~covered].any()
-        assert np.abs(tpl[:, covered]).min(axis=0).all()
-
-    @pytest.mark.parametrize("kind", ["pca", "procrustes"])
-    def test_uniform_and_supplied_weights(self, kind):
-        rng = np.random.default_rng(14)
-        nv = 40
-        sls = make_searchlights(rng, nv)
-        dms = low_rank_dms(rng, nv=nv)
-        counts = np.zeros(nv)
-        for sl in sls:
-            counts[sl] += 1
-        uniform = [1.0 / counts[sl] for sl in sls]
-        np.testing.assert_allclose(
-            searchlight_template(dms, sls, kind=kind),
-            reference_template(dms, sls, uniform, kind),
-            atol=1e-10,
-        )
-        weights = [rng.random(len(sl)) * 3 for sl in sls]
-        np.testing.assert_allclose(
-            searchlight_template(dms, sls, kind=kind, weights=weights),
-            reference_template(dms, sls, weights, kind),
-            atol=1e-10,
-        )
-
-    def test_threads_and_dtype(self):
-        rng = np.random.default_rng(15)
-        sls = make_searchlights(rng, nv=40)
-        dms = low_rank_dms(rng)
-        serial = searchlight_template(dms, sls)
-        for n_jobs in (2, -1):
-            np.testing.assert_array_equal(
-                searchlight_template(dms, sls, n_jobs=n_jobs), serial
-            )
-        # The BLAS thread count may change the rounding, not the result.
-        np.testing.assert_allclose(
-            searchlight_template(dms, sls, n_jobs=2, max_blas_threads=None),
-            serial,
-            rtol=1e-9,
-        )
-        single = searchlight_template(dms.astype(np.float32), sls)
-        assert single.dtype == np.float32
-        np.testing.assert_allclose(single, serial, rtol=1e-4, atol=1e-4)
-
-    def test_errors(self):
-        rng = np.random.default_rng(16)
-        nv = 40
-        sls = make_searchlights(rng, nv)
-        dms = low_rank_dms(rng, nv=nv)
-        cases = [
-            (dict(n_jobs=0), ValueError, "nonzero"),
-            (dict(max_blas_threads=0), ValueError, "max_blas_threads"),
-            (
-                dict(weights=[np.ones(len(sl)) for sl in sls][:-1]),
-                ValueError,
-                "one entry",
-            ),
-            (
-                dict(weights=[np.ones(len(sl) + 1) for sl in sls]),
-                ValueError,
-                "one weight per vertex",
-            ),
-        ]
-        for kwargs, error, match in cases:
-            with pytest.raises(error, match=match):
-                searchlight_template(dms, sls, **kwargs)
-        with pytest.raises(ValueError, match="3D"):
-            searchlight_template(dms[0], sls)
-        with pytest.raises(ValueError, match="NaN"):
-            searchlight_template(np.r_[dms[:-1], [np.full(dms.shape[1:], np.nan)]], sls)
-        with pytest.raises(ValueError, match="defined for 40 vertices"):
-            searchlight_template(dms[:, :, :-1], nb.Searchlights(sls, nv=nv))
-        with pytest.raises(TypeError):
-            searchlight_template(dms, sls, np.ones(nv), 10.0)
+            searchlight_fit(X, Y, sls, lambda a, b: np.zeros((2, 2)))

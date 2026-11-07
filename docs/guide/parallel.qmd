@@ -3,7 +3,7 @@ title: "Parallel fitting and reproducibility"
 ---
 
 The searchlight fitters run one local model per searchlight.
-Use the settings below with `searchlight_ridge`, `searchlight_procrustes`, or `searchlight_hyperalignment`.
+Use the settings below with `searchlight_ridge`, `searchlight_procrustes`, or `searchlight_fit`.
 
 ## Choose the number of threads
 
@@ -44,7 +44,7 @@ The library depends on your NumPy and SciPy installations, not just your operati
 The fitters combine local transformations in a fixed searchlight order, regardless of `n_jobs`.
 Using one BLAS thread also avoids changes in the order of floating-point additions caused by BLAS threading.
 For reproducible analyses, keep the input data, preprocessing, searchlights, fitting parameters, and software versions fixed, and record the thread settings.
-If a step uses randomness, fix its seed; a custom `sl_func` must also be deterministic and safe to call from several threads at once.
+If a step uses randomness, fix its seed; a custom `fit_local` passed to `searchlight_fit` must also be deterministic and safe to call from several threads at once.
 
 Exact agreement across machines or numerical libraries is not guaranteed; compare results with a numerical tolerance.
 For MKL, `export MKL_CBWR=COMPATIBLE` selects a consistent code path and enables its conditional reproducibility mode, potentially at a performance cost; see [Intel's reproducibility documentation](https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-windows/2024-1/specifying-code-branches.html) for its conditions.

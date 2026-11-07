@@ -1,14 +1,31 @@
+"""Computing hyperalignment templates from several individuals' data.
+
+`compute_template` computes a template for a set of features, such as the
+vertices of a brain region, and `compute_searchlight_template` combines local
+templates across searchlights into a template for a whole space. The
+HyperBrain templates distributed with neuroboros are loaded with `nb.tpl`
+from the top-level `neuroboros.templates` module.
+"""
+
 import warnings
 
 import numpy as np
+from joblib import Parallel, delayed
 from scipy.linalg import eigh
 from scipy.stats import zscore
+from threadpoolctl import threadpool_limits
 
 from ..linalg import safe_svd
 from .procrustes import procrustes
+from .searchlight import (
+    _check_max_blas_threads,
+    _check_n_jobs,
+    _check_nv,
+    _default_weights,
+)
 
 
-def pca_decomposition(
+def _pca_decomposition(
     dms, *, max_components=None, solver="eigh", normalize_subjects=False
 ):
     """Decompose the data of several subjects, concatenated along features.
@@ -94,8 +111,8 @@ def pca_decomposition(
     return scores, loadings
 
 
-def compute_pca_template(dms, sl=None, *, max_components=None, solver="eigh"):
-    """PCA template: the scores of `pca_decomposition`, normalized by subjects.
+def _pca_template(dms, sl=None, *, max_components=None, solver="eigh"):
+    """PCA template: the scores of `_pca_decomposition`, normalized by subjects.
 
     Parameters
     ----------
@@ -105,9 +122,9 @@ def compute_pca_template(dms, sl=None, *, max_components=None, solver="eigh"):
     sl : ndarray or None, default=None
         Indices of the features to use. If None, all features are used.
     max_components : int or None, default=None
-        The maximum number of components; see `pca_decomposition`.
+        The maximum number of components; see `_pca_decomposition`.
     solver : {'eigh', 'svd'}, default='eigh'
-        See `pca_decomposition`.
+        See `_pca_decomposition`.
 
     Returns
     -------
@@ -116,16 +133,16 @@ def compute_pca_template(dms, sl=None, *, max_components=None, solver="eigh"):
     """
     if sl is not None:
         dms = dms[:, :, sl]
-    scores, _ = pca_decomposition(
+    scores, _ = _pca_decomposition(
         dms, max_components=max_components, solver=solver, normalize_subjects=True
     )
     return scores
 
 
-def compute_pca_var1_template(dms, sl=None, *, max_components=None, solver="eigh"):
+def _pca_mean_template(dms, sl=None, *, max_components=None, solver="eigh"):
     """PCA template with components scaled by their mean loading norm.
 
-    Like `compute_pca_template`, but instead of normalizing by the number
+    Like `_pca_template`, but instead of normalizing by the number
     of subjects, each component is scaled by the arithmetic mean across
     subjects of the norm of its loadings on the subject's features.
 
@@ -137,9 +154,9 @@ def compute_pca_var1_template(dms, sl=None, *, max_components=None, solver="eigh
     sl : ndarray or None, default=None
         Indices of the features to use. If None, all features are used.
     max_components : int or None, default=None
-        The maximum number of components; see `pca_decomposition`.
+        The maximum number of components; see `_pca_decomposition`.
     solver : {'eigh', 'svd'}, default='eigh'
-        See `pca_decomposition`.
+        See `_pca_decomposition`.
 
     Returns
     -------
@@ -148,17 +165,17 @@ def compute_pca_var1_template(dms, sl=None, *, max_components=None, solver="eigh
     """
     if sl is not None:
         dms = dms[:, :, sl]
-    scores, loadings = pca_decomposition(
+    scores, loadings = _pca_decomposition(
         dms, max_components=max_components, solver=solver, normalize_subjects=False
     )
     w = np.sqrt(np.sum(loadings**2, axis=2)).mean(axis=1)
     return scores * w[np.newaxis]
 
 
-def compute_pca_var2_template(dms, sl=None, *, max_components=None, solver="eigh"):
+def _pca_geometric_mean_template(dms, sl=None, *, max_components=None, solver="eigh"):
     """PCA template with components scaled by their geometric mean loading norm.
 
-    Like `compute_pca_var1_template`, with the geometric instead of the
+    Like `_pca_mean_template`, with the geometric instead of the
     arithmetic mean across subjects of the loading norms.
 
     Parameters
@@ -169,9 +186,9 @@ def compute_pca_var2_template(dms, sl=None, *, max_components=None, solver="eigh
     sl : ndarray or None, default=None
         Indices of the features to use. If None, all features are used.
     max_components : int or None, default=None
-        The maximum number of components; see `pca_decomposition`.
+        The maximum number of components; see `_pca_decomposition`.
     solver : {'eigh', 'svd'}, default='eigh'
-        See `pca_decomposition`.
+        See `_pca_decomposition`.
 
     Returns
     -------
@@ -180,7 +197,7 @@ def compute_pca_var2_template(dms, sl=None, *, max_components=None, solver="eigh
     """
     if sl is not None:
         dms = dms[:, :, sl]
-    scores, loadings = pca_decomposition(
+    scores, loadings = _pca_decomposition(
         dms, max_components=max_components, solver=solver, normalize_subjects=False
     )
     # Zero-variance components have zero loadings; their scale is zero too.
@@ -189,7 +206,7 @@ def compute_pca_var2_template(dms, sl=None, *, max_components=None, solver="eigh
     return scores * w[np.newaxis]
 
 
-def compute_gpa_template(
+def _gpa_template(
     dms,
     sl=None,
     *,
@@ -276,7 +293,7 @@ def compute_gpa_template(
     return tpl
 
 
-def compute_procrustes_template(
+def _procrustes_template(
     dms,
     sl=None,
     *,
@@ -380,7 +397,13 @@ def _warn_if_not_centered(dms):
 
 
 def compute_template(
-    dms, sl=None, *, kind="pca", max_components=None, common_topography=None
+    dms,
+    sl=None,
+    *,
+    kind="pca",
+    max_components=None,
+    solver="eigh",
+    common_topography=None,
 ):
     """Compute a template from the data of several subjects.
 
@@ -407,6 +430,13 @@ def compute_template(
         the smaller of the number of samples and the total number of
         features across subjects. If None, all components are kept. Ignored
         for ``'procrustes'``.
+    solver : {'eigh', 'svd'}, default='eigh'
+        The solver of the decomposition for ``'pca'``. ``'eigh'``
+        decomposes the smaller Gram matrix of the concatenated data, which
+        is faster; ``'svd'`` decomposes the data directly. Components with
+        negligible variance are treated as zero, with a cutoff that is
+        larger for ``'eigh'``, so the solvers may differ in those
+        components. Ignored for ``'procrustes'``.
     common_topography : bool or None, default=None
         Whether to map the template onto the features by the orthogonal
         Procrustes transform that brings it closest to the subjects' data
@@ -431,13 +461,114 @@ def compute_template(
     _warn_if_not_centered(dms)
 
     if kind == "pca":
-        tpl = compute_pca_template(dms, max_components=max_components)
+        tpl = _pca_template(dms, max_components=max_components, solver=solver)
     else:
-        tpl = compute_procrustes_template(
+        tpl = _procrustes_template(
             dms, reflection=True, scaling=False, zscore_common=True
         )
     if common_topography:
         ns, nt, nv = dms.shape
         T = procrustes(np.tile(tpl, (ns, 1)), dms.reshape(ns * nt, nv))
         tpl = tpl @ T
+    return tpl
+
+
+def compute_searchlight_template(
+    dms,
+    sls,
+    *,
+    kind="pca",
+    solver="eigh",
+    weights=None,
+    n_jobs=1,
+    max_blas_threads=1,
+):
+    """Build a template by combining local templates across searchlights.
+
+    In each searchlight, a local template is computed from the data of all
+    subjects with `compute_template`. For ``'pca'``, its columns are
+    components rather than vertices, so it is mapped back to the
+    searchlight's vertices by Procrustes alignment to the subjects' data.
+    The local templates are then combined vertex by vertex into one
+    template using ``weights``.
+
+    Parameters
+    ----------
+    dms : ndarray of shape (n_subjects, n_samples, n_features)
+        The data of the subjects, with samples in correspondence across
+        subjects. The columns should have zero means; see
+        `compute_template`.
+    sls : Searchlights or list of ndarrays
+        Each entry holds the indices of the vertices in a searchlight.
+    kind : {'pca', 'procrustes'}, default='pca'
+        The kind of local template; see `compute_template`. ``'pca'``
+        keeps at most as many components as the searchlight has vertices.
+    solver : {'eigh', 'svd'}, default='eigh'
+        The solver of the local decompositions for ``'pca'``; see
+        `compute_template`. Ignored for ``'procrustes'``.
+    weights : list of ndarrays or None, default=None
+        Weights for combining the local templates. Entry ``i`` has one
+        weight per vertex of the ``i``-th searchlight. If None, they are
+        computed from ``sls``: distance-based weights for a `Searchlights`
+        object with distances, uniform weights otherwise. Computed weights
+        sum to 1 for each vertex across the searchlights containing it;
+        supplied weights are used as they are.
+    n_jobs : int, default=1
+        The number of threads computing local templates, following joblib
+        conventions; -1 uses all CPUs. The local templates are combined in
+        a fixed order, so the result does not depend on it.
+    max_blas_threads : int or None, default=1
+        The maximum number of BLAS threads while computing, whatever
+        ``n_jobs`` is, set with threadpoolctl; None keeps the current
+        setting. One thread avoids oversubscription with several ``n_jobs``
+        and reduces numerical variation caused by BLAS threading. It has no
+        effect on Apple's Accelerate, which only the
+        ``VECLIB_MAXIMUM_THREADS`` environment variable controls.
+
+    Returns
+    -------
+    tpl : ndarray of shape (n_samples, n_features)
+        The template, with the dtype of ``dms``.
+    """
+    n_jobs = _check_n_jobs(n_jobs)
+    max_blas_threads = _check_max_blas_threads(max_blas_threads)
+    dms = np.asarray(dms)
+    if dms.ndim != 3:
+        raise ValueError(
+            "`dms` must be a 3D array of shape (n_subjects, n_samples, n_features)."
+        )
+    if not np.isfinite(dms).all():
+        raise ValueError("`dms` contains NaN or infinite values.")
+    _check_nv("sls", sls, dms.shape[2])
+    if weights is None:
+        weights = _default_weights(sls)
+    elif len(weights) != len(sls):
+        raise ValueError("`weights` must have one entry per searchlight.")
+
+    def fit(sl, w):
+        if len(sl) == 0:
+            return None
+        w = np.asarray(w)
+        if w.shape != (len(sl),):
+            raise ValueError(
+                "Each entry of `weights` must have one weight per vertex of "
+                "the searchlight."
+            )
+        local = compute_template(
+            dms, sl, kind=kind, max_components=len(sl), solver=solver
+        )
+        return local * w[np.newaxis]
+
+    tpl = np.zeros_like(dms[0])
+    tasks = zip(sls, weights)
+    with threadpool_limits(limits=max_blas_threads):
+        if n_jobs == 1:
+            results = (fit(*task) for task in tasks)
+        else:
+            results = Parallel(n_jobs=n_jobs, prefer="threads", return_as="generator")(
+                delayed(fit)(*task) for task in tasks
+            )
+        for sl, local in zip(sls, results):
+            if local is not None:
+                tpl[:, sl] += local
     return tpl
