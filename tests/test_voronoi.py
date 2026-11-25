@@ -46,3 +46,20 @@ def test_native_voronoi_legacy_arguments(subdivided_mesh, positional, verbose):
     np.testing.assert_allclose(nnd, expected_nnd)
     np.testing.assert_array_equal(nn[:4], np.arange(4))
     np.testing.assert_array_equal(nnd[:4], np.zeros(4))
+
+
+def test_dijkstra_distances_original_import_path():
+    from neuroboros.surface.voronoi import dijkstra_distances
+    from neuroboros.surface.voronoi_legacy import (
+        dijkstra_distances as legacy_dijkstra_distances,
+    )
+
+    assert dijkstra_distances is legacy_dijkstra_distances
+    neighbors = {0: {1: 1.0}, 1: {0: 1.0, 2: 2.0}, 2: {1: 2.0}}
+    np.testing.assert_array_equal(
+        dijkstra_distances(3, [(0.0, 0)], neighbors), [0.0, 1.0, 3.0]
+    )
+    np.testing.assert_array_equal(
+        dijkstra_distances(3, [(0.0, 0)], neighbors, max_dist=1.5),
+        [0.0, 1.0, np.inf],
+    )

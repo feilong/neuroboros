@@ -1,10 +1,12 @@
-import heapq
 import warnings
 
 import numpy as np
 import scipy.sparse as sparse
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial.distance import cdist
+
+# Preserve the original import path for callers of the legacy helper.
+from .voronoi_legacy import dijkstra_distances as dijkstra_distances
 
 
 def subdivide_edges(coords, faces, n_div):
@@ -130,60 +132,6 @@ def neighbors_to_coo(neighbors):
     cols = np.fromiter((j for _ in neighbors.values() for j in _), int, n)
     dists = np.fromiter((d for _ in neighbors.values() for d in _.values()), float, n)
     return rows, cols, dists
-
-
-def dijkstra_distances(nv, candidates, neighbors, max_dist=None):
-    """Dijkstra's algorithm to estimate the geodesic distances.
-
-    This function estimates the geodesic distances between a vertex and all
-    vertices in the mesh using Dijkstra's algorithm. If the vertex is part of
-    the mesh, the ``candidates`` list should contain only one tuple
-    ``(0.0, idx)`` where ``idx`` is the index of the vertex. If the vertex is
-    not part of the mesh, the ``candidates`` list should contain tuples
-    ``(d, idx)`` where ``d`` is the distance between the vertex and the
-    neighboring vertices and ``idx`` is the index of the neighboring vertices.
-
-    Parameters
-    ----------
-    nv : int
-        The number of vertices.
-    candidates : list
-        The list of candidate vertices. Each element is a tuple of the
-        distance and the vertex index.
-    neighbors : dict
-        The neighbors of each vertex. The keys are the vertex indices. The
-        values are dictionaries. The keys of the dictionaries are the indices
-        of the neighboring vertices. The values of the dictionaries are the
-        distances between the vertex and the neighboring vertices.
-    max_dist : float or None, default=None
-        The maximum distance to search. If None, the maximum distance is
-        infinity.
-
-    Returns
-    -------
-    dists : ndarray of shape (nv,)
-        The estimated geodesic distances.
-    """
-    dists = np.full((nv,), np.inf)
-    finished = np.zeros((nv,), dtype=bool)
-    for d, idx in candidates:
-        dists[idx] = d
-
-    while candidates:
-        d, idx = heapq.heappop(candidates)
-        if finished[idx]:
-            continue
-
-        for nbr, nbr_d in neighbors[idx].items():
-            new_d = d + nbr_d
-            if max_dist is not None and new_d > max_dist:
-                continue
-            if new_d < dists[nbr]:
-                dists[nbr] = new_d
-                heapq.heappush(candidates, (new_d, nbr))
-        finished[idx] = True
-
-    return dists
 
 
 def subdivision_voronoi(
