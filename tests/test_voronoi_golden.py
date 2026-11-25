@@ -21,7 +21,11 @@ def _skip_if_slow(case):
         pytest.skip("Slow; set NEUROBOROS_SLOW_TESTS=1 to run.")
 
 
-@pytest.mark.parametrize("compute", [vg.compute, vg.compute_class])
+@pytest.mark.parametrize(
+    "compute",
+    [vg.compute, vg.compute_class, vg.compute_class_uncached],
+    ids=lambda f: f.__name__,
+)
 @pytest.mark.parametrize("case", vg.CASES, ids=vg.case_id)
 def test_golden(case, compute):
     _skip_if_slow(case)
@@ -36,8 +40,13 @@ def test_golden(case, compute):
     vg.check(compute(case), golden["cases"][vg.case_id(case)]["result"])
 
 
+@pytest.mark.parametrize(
+    "compute",
+    [vg.compute_class, vg.compute_class_uncached],
+    ids=lambda f: f.__name__,
+)
 @pytest.mark.parametrize("case", vg.CASES, ids=vg.case_id)
-def test_class_matches_functions(case):
+def test_class_matches_functions(case, compute):
     """Compare the class with the functions in any environment."""
     _skip_if_slow(case)
-    assert vg.record(vg.compute_class(case)) == vg.record(vg.compute(case))
+    assert vg.record(compute(case)) == vg.record(vg.compute(case))

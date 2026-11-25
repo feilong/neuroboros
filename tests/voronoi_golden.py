@@ -188,17 +188,20 @@ def compute(case):
 
 
 @lru_cache(maxsize=1)
-def _overlap_object(native, n_div, t_div):
+def _overlap_object(native, n_div, t_div, cache_samples):
     coords, faces = nb.geometry("midthickness", LR, native)
     sphere = nb.geometry("sphere.reg", LR, native, vertices_only=True)
-    return VoronoiOverlap(coords, faces, sphere, n_div=n_div, t_div=t_div)
+    return VoronoiOverlap(
+        coords, faces, sphere, n_div=n_div, t_div=t_div, cache_samples=cache_samples
+    )
 
 
-def compute_class(case):
+def compute_class(case, cache_samples=True):
     """Compute a case with ``VoronoiOverlap``."""
     if case["kind"] == "areas":
-        return _overlap_object(case["native"], 8, 32).areas("native")
-    ov = _overlap_object(case["native"], case["n_div"], case["t_div"])
+        ov = _overlap_object(case["native"], 8, 32, cache_samples)
+        return ov.areas("native")
+    ov = _overlap_object(case["native"], case["n_div"], case["t_div"], cache_samples)
     for name in [case["source"], case["target"]]:
         if name not in ov.names:
             points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
@@ -206,6 +209,11 @@ def compute_class(case):
                 warnings.simplefilter("ignore")
                 ov.add(name, points)
     return ov.transform(case["source"], case["target"])
+
+
+def compute_class_uncached(case):
+    """Compute a case with ``VoronoiOverlap`` without cached sample labels."""
+    return compute_class(case, cache_samples=False)
 
 
 def load():
