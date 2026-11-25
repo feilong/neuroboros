@@ -1,4 +1,5 @@
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sparse
@@ -625,12 +626,185 @@ class VoronoiOverlap:
         self._node_coords = np.concatenate([coords, new_coords])
         self._graph = graph
         self._face_nodes = _face_nodes(faces, face_edge_ids, edge_points)
+        self._native = None
         self._point_sets = {}
+        self._placement = None
 
     @property
     def names(self):
         """The names of the point sets, starting with ``"native"``."""
         return ("native", *self._point_sets)
+
+    def add(self, name, coords=None, *, f_indices=None, weights=None):
+        """Add a point set and label the graph nodes with its points.
+
+        Give either the coordinates of the points on the unit sphere (placed
+        on ``sphere`` with ``Sphere.barycentric``), or the face that contains
+        each point and its barycentric weights.
+
+        Parameters
+        ----------
+        name : str
+            The name of the point set. It must be new and not ``"native"``.
+        coords : ndarray of shape (n, 3) or None
+            The coordinates of the points on the unit sphere.
+        f_indices : ndarray of shape (n,) or None
+            The face that contains each point.
+        weights : ndarray of shape (n, 3) or None
+            The barycentric weights of each point in its face.
+        """
+        if name in self.names:
+            raise ValueError(f"A point set named {name!r} already exists.")
+        if coords is not None:
+            if f_indices is not None or weights is not None:
+                raise ValueError(
+                    "Give either coords or f_indices and weights, not both."
+                )
+            if self.sphere is None:
+                raise ValueError("Placing points by coordinates requires sphere.")
+            coords = _finite_copy(coords, "coords")
+            if coords.ndim != 2 or coords.shape[1] != 3:
+                raise ValueError(f"coords must have shape (n, 3), not {coords.shape}.")
+            if self._placement is None:
+                from . import Sphere
+
+                self._placement = Sphere(self.sphere, self.faces)
+            f_indices, weights = self._placement.barycentric(
+                coords, eps=1e-7, return_sparse=False
+            )
+        elif f_indices is None or weights is None:
+            raise ValueError("Give either coords or both f_indices and weights.")
+
+        f_indices = np.array(f_indices)
+        weights = _finite_copy(weights, "weights")
+        if f_indices.ndim != 1 or not np.issubdtype(f_indices.dtype, np.integer):
+            raise ValueError("f_indices must be a 1-D array of integers.")
+        if weights.shape != (len(f_indices), 3):
+            raise ValueError(
+                f"weights must have shape ({len(f_indices)}, 3), not {weights.shape}."
+            )
+        if f_indices.size and (
+            f_indices.min() < 0 or f_indices.max() >= len(self.faces)
+        ):
+            raise ValueError("f_indices contain face indices out of range.")
+        f_indices = f_indices.astype(np.intp, copy=False)
+
+        n_faces = len(np.unique(f_indices))
+        if n_faces != len(f_indices):
+            warnings.warn(
+                f"{len(f_indices)} template vertices are mapped to {n_faces} faces."
+            )
+        self._point_sets[name] = self._label_points(f_indices, weights)
+
+    def discard(self, name):
+        """Remove a point set and its labels.
+
+        For ``"native"``, only the labels are removed. They are computed
+        again when needed.
+        """
+        if name == "native":
+            self._native = None
+        else:
+            self._get(name)
+            del self._point_sets[name]
+
+    def _get(self, name):
+        """Return the labels of a point set, labelling ``"native"`` if needed."""
+        if name == "native":
+            if self._native is None:
+                self._native = self._label_vertices()
+            return self._native
+        if name not in self._point_sets:
+            raise KeyError(f"No point set named {name!r}.")
+        return self._point_sets[name]
+
+    def _label_vertices(self):
+        """Label the graph nodes with the nearest mesh vertex."""
+        nnd, _, nn = dijkstra(
+            self._graph,
+            indices=np.unique(self.faces),
+            return_predecessors=True,
+            min_only=True,
+        )
+        nn = np.where(nn >= 0, nn, -1).astype(np.int32)
+        return _PointSet(
+            size=len(self.coords),
+            nn=nn,
+            nnd=nnd,
+            inside_ptr=np.zeros(len(self.faces) + 1, dtype=np.intp),
+            inside_labels=np.zeros(0, dtype=np.int32),
+            inside_coords=np.zeros((0, 3)),
+        )
+
+    def _label_points(self, f_indices, weights):
+        """Label the graph nodes with the nearest point of a point set.
+
+        Each point becomes an extra node with one-way connections to the
+        boundary nodes of its face, as in ``subdivision_voronoi``.
+        """
+        n_nodes, n = len(self._node_coords), len(f_indices)
+        # The batched matmul rounds like ``weights[i] @ coords[faces[f]]``.
+        corners = self.coords[self.faces[f_indices]]
+        positions = np.matmul(weights[:, np.newaxis], corners)[:, 0]
+        boundary = self._face_nodes[f_indices]
+        # The sum of squares rounds like ``cdist``.
+        diff = positions[:, np.newaxis] - self._node_coords[boundary]
+        distances = np.sqrt(np.sum(diff**2, axis=2))
+        del diff
+
+        # Connections point out of the point nodes only, so paths cannot use
+        # a point node as a shortcut through a face.
+        graph = self._graph
+        mesh_rows = sparse.csr_matrix(
+            (graph.data, graph.indices, graph.indptr), shape=(n_nodes, n_nodes + n)
+        )
+        point_rows = sparse.csr_matrix(
+            (
+                distances.ravel(),
+                boundary.ravel(),
+                np.arange(0, boundary.size + 1, boundary.shape[1]),
+            ),
+            shape=(n, n_nodes + n),
+        )
+        graph = sparse.vstack([mesh_rows, point_rows], format="csr")
+        del mesh_rows, point_rows
+        dists, _, sources = dijkstra(
+            graph,
+            indices=np.arange(n_nodes, n_nodes + n),
+            return_predecessors=True,
+            min_only=True,
+        )
+        del graph
+        nn = np.where(sources[:n_nodes] >= 0, sources[:n_nodes] - n_nodes, -1)
+
+        # The points inside each face, in increasing index.
+        order = np.argsort(f_indices, kind="stable")
+        counts = np.bincount(f_indices, minlength=len(self.faces))
+        return _PointSet(
+            size=n,
+            nn=nn.astype(np.int32),
+            nnd=dists[:n_nodes],
+            inside_ptr=np.concatenate([[0], np.cumsum(counts)]),
+            inside_labels=order.astype(np.int32),
+            inside_coords=positions[order],
+        )
+
+
+@dataclass
+class _PointSet:
+    """The labels of one point set.
+
+    ``nn`` and ``nnd`` are the nearest point and its distance for each graph
+    node. The points inside face ``f`` are
+    ``inside_labels[inside_ptr[f]:inside_ptr[f + 1]]``, at ``inside_coords``.
+    """
+
+    size: int
+    nn: np.ndarray
+    nnd: np.ndarray
+    inside_ptr: np.ndarray
+    inside_labels: np.ndarray
+    inside_coords: np.ndarray
 
 
 def _finite_copy(x, name):
