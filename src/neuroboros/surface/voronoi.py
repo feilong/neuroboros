@@ -633,6 +633,7 @@ class VoronoiOverlap:
         self._native = None
         self._point_sets = {}
         self._placement = None
+        self._samples = {}
 
     @property
     def names(self):
@@ -711,6 +712,128 @@ class VoronoiOverlap:
         else:
             self._get(name)
             del self._point_sets[name]
+        self._samples.pop(name, None)
+
+    def transform(self, source, target):
+        """Overlap areas between the Voronoi cells of two point sets.
+
+        Parameters
+        ----------
+        source, target : str
+            The names of the point sets.
+
+        Returns
+        -------
+        mat : scipy.sparse.csr_matrix of shape (n_source, n_target)
+            ``mat[i, j]`` is the area of the intersection of cell ``i`` of
+            ``source`` and cell ``j`` of ``target``. The matrix is computed
+            on every call. ``transform(b, a)`` equals ``transform(a, b).T``
+            exactly.
+        """
+        n_source, n_target = self._get(source).size, self._get(target).size
+        _, keys, values = self._entries(source, target)
+        unique_keys, inverse = np.unique(keys, return_inverse=True)
+        totals = np.zeros(len(unique_keys))
+        # Accumulate individual face contributions in face order.
+        np.add.at(totals, inverse, values)
+
+        # Sorted keys encode row * n_target + column. Each pair is unique,
+        # so CSR construction does not need to sort or sum duplicate entries.
+        rows, cols = np.divmod(unique_keys, n_target)
+        row_counts = np.bincount(rows, minlength=n_source)
+        indptr = np.concatenate([[0], np.cumsum(row_counts)])
+        mat = sparse.csr_matrix((totals, cols, indptr), shape=(n_source, n_target))
+        mat.eliminate_zeros()
+        return mat
+
+    def areas(self, name):
+        """The area of the Voronoi cell of each point of a point set.
+
+        Return a new array of shape (n_points,). For ``"native"``, this
+        equals ``Surface.vertex_areas_nn`` exactly. Transform row sums can
+        differ slightly because they group the additions differently.
+        """
+        _, keys, values = self._entries(name)
+        areas = np.zeros(self._get(name).size)
+        np.add.at(areas, keys, values)
+        return areas
+
+    def _entries(self, name, other=None, chunk_size=64):
+        """Return parallel arrays of face indices, keys, and area contributions.
+
+        Each face contributes one entry per label of ``name`` (or per pair of
+        labels of ``name`` and ``other``) that its samples have, with the key
+        ``label`` (or ``label * n_other + other_label``). The area is
+        ``count / n_samples * face_area``, as in ``compute_overlap``. Entries
+        are sorted by face, so that ``np.add.at`` adds the areas of each key
+        in face order, as the in-place additions of ``compute_overlap`` do.
+        """
+        names = [name] if other is None else [name, other]
+        point_sets = [self._get(n) for n in names]
+        sample_labels = [self._sample_cache(n) for n in names]
+        n_samples = len(self._ww)
+
+        def encode_labels(labels):
+            # Labels are int32. Convert them to int64 before combining them,
+            # because int32 times a Python int stays int32 and could wrap.
+            keys = labels[0].astype(np.int64)
+            if other is not None:
+                keys = keys * point_sets[1].size + labels[1]
+            return keys
+
+        # Faces where every set has one label give one entry each.
+        is_single = np.logical_and.reduce([s.single >= 0 for s in sample_labels])
+        single_faces = np.flatnonzero(is_single)
+        face_parts = [single_faces]
+        key_parts = [encode_labels([s.single[single_faces] for s in sample_labels])]
+        count_parts = [np.full(len(single_faces), n_samples)]
+
+        mixed_faces = np.flatnonzero(~is_single)
+        for start in range(0, len(mixed_faces), chunk_size):
+            face_indices = mixed_faces[start : start + chunk_size]
+            labels = [
+                self._face_labels(point_set, cached, face_indices)
+                for point_set, cached in zip(point_sets, sample_labels)
+            ]
+            sorted_keys = np.sort(encode_labels(labels), axis=1)
+            # Each row is one face. Mark the start of every run of equal keys,
+            # including the first sample of each face, even if adjacent faces
+            # share a key. Differences between flattened starts give counts.
+            is_run_start = np.ones(sorted_keys.shape, dtype=bool)
+            is_run_start[:, 1:] = sorted_keys[:, 1:] != sorted_keys[:, :-1]
+            run_starts = np.flatnonzero(is_run_start)
+            face_parts.append(face_indices[run_starts // n_samples])
+            key_parts.append(sorted_keys.ravel()[run_starts])
+            count_parts.append(np.diff(run_starts, append=sorted_keys.size))
+
+        # Merge single and mixed faces back into face order. Keep every face's
+        # contribution separate so chunk boundaries cannot change rounding.
+        faces = np.concatenate(face_parts)
+        order = np.argsort(faces, kind="stable")
+        faces = faces[order]
+        keys = np.concatenate(key_parts)[order]
+        counts = np.concatenate(count_parts)[order]
+        values = counts / n_samples * self.face_areas[faces]
+        return faces, keys, values
+
+    def _face_labels(self, point_set, samples, face_indices):
+        """Expand cached labels to shape (len(face_indices), n_samples)."""
+        decoded = np.repeat(
+            samples.single[face_indices, np.newaxis], len(self._ww), axis=1
+        )
+        is_mixed = samples.single[face_indices] < 0
+        mixed_indices = face_indices[is_mixed]
+        cache_rows = np.searchsorted(samples.mixed_faces, mixed_indices)
+        decoded[is_mixed] = self._decode(
+            point_set, mixed_indices, samples.local[cache_rows]
+        )
+        return decoded
+
+    def _sample_cache(self, name):
+        """Return the sample labels of a point set, computing them if needed."""
+        if name not in self._samples:
+            self._samples[name] = self._sample_labels(self._get(name))
+        return self._samples[name]
 
     def _get(self, name):
         """Return the labels of a point set, labelling ``"native"`` if needed."""
@@ -804,6 +927,11 @@ class VoronoiOverlap:
         """
         n_boundary = self._face_nodes.shape[1]
         boundary_labels = labels.nn[self._face_nodes]
+        if np.any(boundary_labels < 0):
+            raise ValueError(
+                "Some faces cannot be reached from any point. Each connected "
+                "part of the mesh needs at least one point."
+            )
         inside_counts = np.diff(labels.inside_ptr)
         is_single = np.all(boundary_labels == boundary_labels[:, :1], axis=1)
         is_single &= inside_counts == 0

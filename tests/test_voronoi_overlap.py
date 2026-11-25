@@ -395,3 +395,140 @@ def test_split_triangle(t_div):
     np.testing.assert_allclose(ww.mean(axis=0), 1 / 3)
     if t_div == 1:
         np.testing.assert_array_equal(ww, [[1 / 3, 1 / 3, 1 / 3]])
+
+
+def _assert_identical(mat, expected):
+    """Assert exact equality of sparse shapes, indices, and values."""
+    mat, expected = mat.tocsr(), expected.tocsr()
+    for m in (mat, expected):
+        m.sort_indices()
+    assert mat.shape == expected.shape
+    np.testing.assert_array_equal(mat.indptr, expected.indptr)
+    np.testing.assert_array_equal(mat.indices, expected.indices)
+    np.testing.assert_array_equal(mat.data, expected.data)
+
+
+def _reference(ov, placements, source, target):
+    """The overlap from compute_overlap, with the labels of ``ov``."""
+    _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    args = []
+    for name in (source, target):
+        labels = ov._get(name)
+        f_inv = {}
+        if name != "native":
+            f_inv = voronoi.inverse_face_mapping(*placements[name], ov.coords, ov.faces)
+        args.append((labels.nn, labels.nnd, f_inv))
+    return voronoi.compute_overlap(
+        ov.faces,
+        ov.face_areas,
+        e_mapping,
+        ov._node_coords,
+        *args[0],
+        *args[1],
+        ov._get(source).size,
+        ov._get(target).size,
+        t_div=ov.t_div,
+    )
+
+
+def _with_point_sets(mesh, n_div=8, t_div=4, sizes=(("few", 5), ("many", 40))):
+    coords, faces, _ = mesh
+    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    placements = {}
+    for name, n in sizes:
+        rng = np.random.default_rng(n)
+        placements[name] = (
+            rng.integers(0, len(faces), n),
+            rng.dirichlet(np.ones(3), n),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ov.add(name, f_indices=placements[name][0], weights=placements[name][1])
+    return ov, placements
+
+
+@pytest.mark.parametrize("n_div", [1, 8])
+@pytest.mark.parametrize("t_div", [1, 2, 3, 8])
+def test_transform_matches_compute_overlap(mesh, n_div, t_div):
+    ov, placements = _with_point_sets(mesh, n_div, t_div)
+    for source in ov.names:
+        for target in ov.names:
+            mat = ov.transform(source, target)
+            _assert_identical(mat, _reference(ov, placements, source, target))
+            _assert_identical(ov.transform(target, source), mat.T)
+            np.testing.assert_allclose(mat.sum(axis=1).A1, ov.areas(source))
+            np.testing.assert_allclose(mat.sum(), ov.face_areas.sum())
+
+
+@pytest.mark.parametrize("n_div", [1, 8])
+@pytest.mark.parametrize("t_div", [1, 2, 3, 8])
+def test_areas(mesh, n_div, t_div):
+    coords, faces, _ = mesh
+    ov, placements = _with_point_sets(mesh, n_div, t_div)
+    expected = Surface(coords, faces).vertex_areas_nn(n_div=n_div, t_div=t_div)
+    np.testing.assert_array_equal(ov.areas("native"), expected)
+    for name in ["few", "many"]:
+        expected = np.zeros(ov._get(name).size)
+        occupation = _expected_samples(ov, name, *placements[name])
+        for f_idx, labels in enumerate(occupation):
+            for u in np.unique(labels):
+                expected[u] += (labels == u).mean() * ov.face_areas[f_idx]
+        np.testing.assert_array_equal(ov.areas(name), expected)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
+def test_entries_chunk_size(mesh, chunk_size):
+    ov, _ = _with_point_sets(mesh)
+    for names in [("native",), ("many",), ("native", "few"), ("many", "native")]:
+        expected = ov._entries(*names)
+        entries = ov._entries(*names, chunk_size=chunk_size)
+        for a, b in zip(entries, expected):
+            np.testing.assert_array_equal(a, b)
+
+
+def test_transform_returns_new_arrays(mesh):
+    ov, _ = _with_point_sets(mesh)
+    mat = ov.transform("native", "many")
+    areas = ov.areas("many")
+    expected_mat, expected_areas = mat.copy(), areas.copy()
+    mat.data[:] = 0
+    areas[:] = 0
+    _assert_identical(ov.transform("native", "many"), expected_mat)
+    _assert_identical(ov.transform("many", "native"), expected_mat.T)
+    np.testing.assert_array_equal(ov.areas("many"), expected_areas)
+
+
+def test_transform_large_labels(mesh):
+    """Pair keys exceed the int32 range."""
+    ov, placements = _with_point_sets(mesh, n_div=1, t_div=2, sizes=[("large", 70000)])
+    assert ov._get("large").size ** 2 > np.iinfo(np.int32).max
+    mat = ov.transform("large", "large")
+    _assert_identical(mat, _reference(ov, placements, "large", "large"))
+    assert mat.indices.max() > 65536
+
+
+def test_transform_unreachable_faces(mesh):
+    coords, faces, _ = mesh
+    # A second copy of the mesh, not connected to the first.
+    ov = VoronoiOverlap(
+        np.concatenate([coords, coords + 10]),
+        np.concatenate([faces, faces + len(coords)]),
+    )
+    ov.add("points", f_indices=[0], weights=[[1, 0, 0]])
+    ov.transform("native", "native")
+    with pytest.raises(ValueError, match="cannot be reached"):
+        ov.transform("native", "points")
+    with pytest.raises(ValueError, match="cannot be reached"):
+        ov.areas("points")
+
+
+def test_discard_releases_samples(mesh):
+    ov, _ = _with_point_sets(mesh)
+    ov.transform("native", "many")
+    assert set(ov._samples) == {"native", "many"}
+    ov.discard("many")
+    ov.discard("native")
+    assert ov._samples == {}
+    with pytest.raises(KeyError):
+        ov.transform("native", "many")
+    _assert_identical(ov.transform("native", "few"), ov.transform("few", "native").T)

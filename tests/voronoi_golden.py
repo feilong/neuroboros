@@ -14,6 +14,7 @@ import os
 import platform
 import subprocess
 import sys
+import warnings
 from functools import lru_cache
 
 import numpy as np
@@ -23,6 +24,7 @@ import scipy.sparse as sparse
 import neuroboros as nb
 from neuroboros.surface import Sphere, Surface
 from neuroboros.surface.voronoi import (
+    VoronoiOverlap,
     compute_overlap,
     inverse_face_mapping,
     native_voronoi,
@@ -183,6 +185,27 @@ def compute(case):
         n2,
         t_div=case["t_div"],
     )
+
+
+@lru_cache(maxsize=1)
+def _overlap_object(native, n_div, t_div):
+    coords, faces = nb.geometry("midthickness", LR, native)
+    sphere = nb.geometry("sphere.reg", LR, native, vertices_only=True)
+    return VoronoiOverlap(coords, faces, sphere, n_div=n_div, t_div=t_div)
+
+
+def compute_class(case):
+    """Compute a case with ``VoronoiOverlap``."""
+    if case["kind"] == "areas":
+        return _overlap_object(case["native"], 8, 32).areas("native")
+    ov = _overlap_object(case["native"], case["n_div"], case["t_div"])
+    for name in [case["source"], case["target"]]:
+        if name not in ov.names:
+            points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ov.add(name, points)
+    return ov.transform(case["source"], case["target"])
 
 
 def load():
