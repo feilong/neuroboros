@@ -421,6 +421,7 @@ def inverse_face_mapping(f_indices, weights, coords, faces):
 
 
 def split_triangle(t_div):
+    """Return barycentric coordinates of the ``t_div**2`` subtriangle centroids."""
     ww1 = []
     for i in range(t_div):
         for j in range(t_div - i):
@@ -432,7 +433,9 @@ def split_triangle(t_div):
         for j in range(t_div - i - 1):
             k = t_div - i - j - 1
             ww2.append([i, j, k])
-    ww2 = (np.array(ww2) + np.array([[2 / 3, 2 / 3, -1 / 3]])) / t_div
+    # Reshape so that t_div=1, which has no inverted sub-triangles, gives an
+    # empty (0, 3) array.
+    ww2 = (np.reshape(ww2, (-1, 3)) + np.array([[2 / 3, 2 / 3, -1 / 3]])) / t_div
     ww = np.concatenate([ww1, ww2])
     return ww
 
@@ -619,6 +622,7 @@ class VoronoiOverlap:
         self.t_div = int(t_div)
         self.cache_samples = cache_samples
         self.face_areas = compute_face_areas(coords, faces)
+        self._ww = split_triangle(self.t_div)  # Barycentric sample coordinates.
 
         _, face_edge_ids, edge_points, new_coords, graph = _subdivided_graph(
             coords, faces, self.n_div
@@ -789,6 +793,111 @@ class VoronoiOverlap:
             inside_coords=positions[order],
         )
 
+    def _sample_labels(self, labels, chunk_size=64):
+        """Label the samples of every face with the nearest point.
+
+        A face whose boundary nodes all have the same label, and that has no
+        point inside, takes that label (``single``). For the other faces
+        (``mixed_faces``), ``local`` holds the index of each sample's nearest
+        candidate. Candidates are the face's boundary nodes in
+        ``_face_nodes`` order, followed by its inside points in index order.
+        """
+        n_boundary = self._face_nodes.shape[1]
+        boundary_labels = labels.nn[self._face_nodes]
+        inside_counts = np.diff(labels.inside_ptr)
+        is_single = np.all(boundary_labels == boundary_labels[:, :1], axis=1)
+        is_single &= inside_counts == 0
+        single = np.where(is_single, boundary_labels[:, 0], -1).astype(np.int32)
+        mixed_faces = np.flatnonzero(~is_single)
+        del boundary_labels
+
+        dtype = _local_dtype(n_boundary + inside_counts.max(initial=0))
+        local = np.empty((len(mixed_faces), len(self._ww)), dtype=dtype)
+        for start in range(0, len(mixed_faces), chunk_size):
+            chunk = slice(start, start + chunk_size)
+            face_indices = mixed_faces[chunk]
+            samples, distances = self._boundary_distances(face_indices)
+            local[chunk] = self._local_labels(labels, face_indices, samples, distances)
+        return _SampleLabels(single=single, mixed_faces=mixed_faces, local=local)
+
+    def _boundary_distances(self, face_indices):
+        """Return sample coordinates and distances to each face's boundary nodes.
+
+        For k face indices, the shapes are (k, n_samples, 3) and
+        (k, n_samples, n_boundary). Neither array depends on the point set.
+        """
+        # The batched matmul rounds like ``ww @ coords[f]``.
+        samples = np.matmul(self._ww, self.coords[self.faces[face_indices]])
+        boundary = self._node_coords[self._face_nodes[face_indices]]
+        distances = np.empty((len(face_indices), len(self._ww), boundary.shape[1]))
+        for i in range(len(face_indices)):
+            distances[i] = cdist(samples[i], boundary[i])
+        return samples, distances
+
+    def _local_labels(self, labels, face_indices, samples, distances):
+        """Return the index of each sample's nearest candidate in its face.
+
+        A boundary node's score is its graph distance to the nearest point
+        plus its Euclidean distance to the sample. An inside point's score
+        is its Euclidean distance to the sample. Ties go to the first
+        candidate, as in ``compute_occupation``.
+        """
+        boundary_nnd = labels.nnd[self._face_nodes[face_indices]]
+        scores = distances + boundary_nnd[:, np.newaxis]
+        local = np.argmin(scores, axis=2)
+        best_scores = np.take_along_axis(scores, local[..., np.newaxis], axis=2)[..., 0]
+        del scores
+
+        # The inside points win only if strictly closer, so ties still go to
+        # the boundary nodes, which come first.
+        n_boundary = self._face_nodes.shape[1]
+        ptr = labels.inside_ptr
+        sample_indices = np.arange(samples.shape[1])
+        has_inside = ptr[face_indices + 1] > ptr[face_indices]
+        for i in np.flatnonzero(has_inside):
+            face = face_indices[i]
+            inside = labels.inside_coords[ptr[face] : ptr[face + 1]]
+            inside_distances = cdist(samples[i], inside)
+            nearest = np.argmin(inside_distances, axis=1)
+            closer = inside_distances[sample_indices, nearest] < best_scores[i]
+            local[i, closer] = n_boundary + nearest[closer]
+        return local
+
+    def _decode(self, labels, face_indices, local):
+        """Convert local candidate indices to point labels for the given faces.
+
+        ``local`` and the result have shape (len(face_indices), n_samples).
+        """
+        n_boundary = self._face_nodes.shape[1]
+        # Widen compact unsigned indices before computing array offsets.
+        local = local.astype(np.intp)
+        sample_faces = np.broadcast_to(face_indices[:, np.newaxis], local.shape)
+        decoded = np.empty(local.shape, dtype=np.int32)
+        on_boundary = local < n_boundary
+        decoded[on_boundary] = labels.nn[
+            self._face_nodes[sample_faces[on_boundary], local[on_boundary]]
+        ]
+        inside = ~on_boundary
+        decoded[inside] = labels.inside_labels[
+            labels.inside_ptr[sample_faces[inside]] + local[inside] - n_boundary
+        ]
+        return decoded
+
+
+@dataclass
+class _SampleLabels:
+    """The labels of the samples of each face for one point set.
+
+    For faces outside ``mixed_faces``, ``single[f]`` is the label of every
+    sample (possibly -1 if unreachable). For mixed faces, ``single`` is -1
+    and unused; ``local[i]`` holds the candidate index of each sample of
+    ``mixed_faces[i]``.
+    """
+
+    single: np.ndarray
+    mixed_faces: np.ndarray
+    local: np.ndarray
+
 
 @dataclass
 class _PointSet:
@@ -805,6 +914,17 @@ class _PointSet:
     inside_ptr: np.ndarray
     inside_labels: np.ndarray
     inside_coords: np.ndarray
+
+
+def _local_dtype(n_candidates):
+    """Choose uint8 or uint16 for indices from 0 to n_candidates - 1."""
+    if n_candidates <= 256:
+        return np.uint8
+    if n_candidates <= 65536:
+        return np.uint16
+    raise ValueError(
+        f"{n_candidates} candidates in one face exceed the limit of 65536."
+    )
 
 
 def _finite_copy(x, name):

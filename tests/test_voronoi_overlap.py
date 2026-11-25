@@ -249,3 +249,149 @@ def test_discard(mesh):
     assert ov._native is None
     assert ov.names == ("native", "b", "a")
     np.testing.assert_array_equal(ov._get("native").nn, nn)
+
+
+def _expected_samples(ov, name, f_indices=None, weights=None):
+    """The sample labels of every face from compute_occupation."""
+    labels = ov._get(name)
+    _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    f_inv = {}
+    if f_indices is not None:
+        f_inv = voronoi.inverse_face_mapping(f_indices, weights, ov.coords, ov.faces)
+    expected = np.empty((len(ov.faces), len(ov._ww)), dtype=int)
+    for f_idx, f in enumerate(ov.faces):
+        a, b, c = sorted(f)
+        indices = np.concatenate(
+            [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
+        )
+        occupation = voronoi.compute_occupation(
+            f_idx, f, ov._node_coords, indices, labels.nn, labels.nnd, f_inv, ov._ww
+        )
+        for u, mask in occupation.items():
+            expected[f_idx, mask] = u
+    return expected
+
+
+def _decoded_samples(ov, name, samples):
+    decoded = np.repeat(samples.single[:, np.newaxis], len(ov._ww), axis=1)
+    decoded[samples.mixed_faces] = ov._decode(
+        ov._get(name), samples.mixed_faces, samples.local
+    )
+    return decoded
+
+
+@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
+@pytest.mark.parametrize("n_div", [1, 2, 8])
+@pytest.mark.parametrize("t_div", [1, 2, 8])
+@pytest.mark.parametrize("n_points", [0, 5, 40])
+def test_sample_labels(mesh, n_div, t_div, n_points):
+    coords, faces, sphere = mesh
+    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    name, placement = "native", {}
+    if n_points:
+        rng = np.random.default_rng(n_points)
+        weights = rng.dirichlet(np.ones(3), n_points)
+        f_indices = rng.integers(0, len(faces), n_points)
+        placement = dict(f_indices=f_indices, weights=weights)
+        name = "points"
+        ov.add(name, **placement)
+    samples = ov._sample_labels(ov._get(name))
+    expected = _expected_samples(ov, name, **placement)
+
+    np.testing.assert_array_equal(_decoded_samples(ov, name, samples), expected)
+    is_single = samples.single >= 0
+    np.testing.assert_array_equal(np.flatnonzero(~is_single), samples.mixed_faces)
+    assert not np.any(is_single & (np.diff(ov._get(name).inside_ptr) > 0))
+    assert samples.local.shape == (len(samples.mixed_faces), t_div**2)
+    assert samples.local.dtype == np.uint8
+    if n_points == 5:
+        assert 0 < is_single.sum() < len(faces)
+
+
+@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
+@pytest.mark.parametrize("n_div", [1, 2, 4])
+@pytest.mark.parametrize("t_div", [2, 4])
+def test_sample_labels_ties(n_div, t_div):
+    """A flat, symmetric mesh where many scores tie exactly."""
+    coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
+    faces = np.array([[0, 1, 2], [1, 3, 2]])
+    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    # Points at vertex 1 and 2 of both faces, at the center of the square,
+    # and a pair of points mirrored across the diagonal in face 0.
+    f_indices = np.array([0, 1, 0, 1, 0, 0, 0])
+    weights = np.array(
+        [
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0.5, 0.5],
+            [0.4, 0.4, 0.2],
+            [0.4, 0.2, 0.4],
+        ]
+    )
+    ov.add("points", f_indices=f_indices, weights=weights)
+    for name, placement in [
+        ("native", {}),
+        ("points", dict(f_indices=f_indices, weights=weights)),
+    ]:
+        samples = ov._sample_labels(ov._get(name))
+        expected = _expected_samples(ov, name, **placement)
+        np.testing.assert_array_equal(_decoded_samples(ov, name, samples), expected)
+
+
+@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
+@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
+def test_sample_labels_chunk_size(mesh, points, chunk_size):
+    ov = VoronoiOverlap(*mesh, t_div=4)
+    ov.add("points", points)
+    for name in ov.names:
+        expected = ov._sample_labels(ov._get(name))
+        samples = ov._sample_labels(ov._get(name), chunk_size=chunk_size)
+        for key, value in vars(expected).items():
+            np.testing.assert_array_equal(getattr(samples, key), value)
+
+
+@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
+@pytest.mark.parametrize("n_inside, dtype", [(232, np.uint8), (233, np.uint16)])
+def test_sample_labels_dtype(mesh, n_inside, dtype):
+    coords, faces, _ = mesh
+    ov = VoronoiOverlap(coords, faces, t_div=4)
+    rng = np.random.default_rng(0)
+    others = np.delete(np.arange(len(faces)), 3)
+    f_indices = np.concatenate([np.full(n_inside, 3), others])
+    weights = rng.dirichlet(np.ones(3), len(f_indices))
+    ov.add("points", f_indices=f_indices, weights=weights)
+    samples = ov._sample_labels(ov._get("points"))
+    assert samples.local.dtype == dtype
+    expected = _expected_samples(ov, "points", f_indices, weights)
+    np.testing.assert_array_equal(_decoded_samples(ov, "points", samples), expected)
+
+
+def test_sample_labels_limit(mesh):
+    coords, faces, _ = mesh
+    ov = VoronoiOverlap(coords, faces, n_div=1, t_div=2)
+    weights = np.full((65534, 3), 1 / 3)
+    with pytest.warns(UserWarning, match="mapped to"):
+        ov.add("points", f_indices=np.zeros(65534, dtype=int), weights=weights)
+    with pytest.raises(ValueError, match="65537 candidates in one face"):
+        ov._sample_labels(ov._get("points"))
+
+
+@pytest.mark.parametrize(
+    "n_candidates, dtype", [(1, np.uint8), (256, np.uint8), (257, np.uint16)]
+)
+def test_local_dtype(n_candidates, dtype):
+    assert voronoi._local_dtype(n_candidates) == dtype
+    assert voronoi._local_dtype(65536) == np.uint16
+
+
+@pytest.mark.parametrize("t_div", [1, 2, 3, 32])
+def test_split_triangle(t_div):
+    ww = voronoi.split_triangle(t_div)
+    assert ww.shape == (t_div**2, 3)
+    np.testing.assert_allclose(ww.sum(axis=1), 1)
+    assert np.all(ww > 0)
+    np.testing.assert_allclose(ww.mean(axis=0), 1 / 3)
+    if t_div == 1:
+        np.testing.assert_array_equal(ww, [[1 / 3, 1 / 3, 1 / 3]])
