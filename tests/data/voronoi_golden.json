@@ -1,0 +1,298 @@
+{
+  "source": "v0.1.5-301-gdfb659d",
+  "environment": {
+    "python": "3.12.7",
+    "numpy": "2.2.6",
+    "scipy": "1.16.0",
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "byteorder": "little"
+  },
+  "inputs": {
+    "onavg-ico32/midthickness": "866b40f5dc24f1aeb5af929a1eb73db4da9bef02cdb95b5239cc6e4bffa1e412",
+    "onavg-ico32/faces": "d3270764a5d062a977313d81d3b7758a8502c4db21f83a8ca7c49706fcc21120",
+    "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+    "onavg-ico8/sphere.reg": "6bbc6dfab026c02d463d58db12cf3a85fe663b1a6df852bcaa47939354c65f80",
+    "onavg-ico64/midthickness": "81885b395b0493e41541623ce54bf00af15ded54b8c7a7ebc63602be5ac717c7",
+    "onavg-ico64/faces": "c8c52467c74dcff072997390bb9a6c62d087be06971ea9c31695c438f263db7a",
+    "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc",
+    "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+    "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+    "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c"
+  },
+  "cases": {
+    "overlap-onavg-ico32-native-onavg-ico8-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.715683184855,
+        "nnz": 16757,
+        "sha256": "c3dbf807cc884064c0e0bb9eb521de429c3236694bc103d3a11b12afe787092f"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n1-t8": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 1,
+        "t_div": 8
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.715683184855,
+        "nnz": 16242,
+        "sha256": "b1a5683a6becca67eaf73cea63ec040f3539585c66d3c8c4e584ead286dfe71d"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n1-t16": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 1,
+        "t_div": 16
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.71568318486,
+        "nnz": 16432,
+        "sha256": "d18ca87a93268a85750dea413a6402922223c671a0b0acb76414726a6a1c6872"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n2-t8": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 2,
+        "t_div": 8
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.71568318486,
+        "nnz": 16449,
+        "sha256": "2ca60b472681f184847d5bd4114bae153683bc5ffdefbb706199703e8f40a788"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n2-t16": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 2,
+        "t_div": 16
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.71568318486,
+        "nnz": 16677,
+        "sha256": "4efbbbea44d2cc119c1cd69f06ba634d14a4a59790cb56e5d7d69fa776a1bdce"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n4-t8": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 4,
+        "t_div": 8
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.71568318486,
+        "nnz": 16378,
+        "sha256": "8270071f3320505b5cf3ca5bd3ef479230d688d3a453d401fb8dd6d22139be3b"
+      }
+    },
+    "overlap-onavg-ico32-native-onavg-ico8-n4-t16": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico32",
+        "source": "native",
+        "target": "onavg-ico8",
+        "n_div": 4,
+        "t_div": 16
+      },
+      "result": {
+        "shape": [
+          10242,
+          642
+        ],
+        "sum": 56478.715683184855,
+        "nnz": 16639,
+        "sha256": "f6ecc4743d5e2d35de8f76f68db53e01ad575e168512d0687ec8eddb9aedaea6"
+      }
+    },
+    "overlap-onavg-ico64-native-onavg-ico32-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico64",
+        "source": "native",
+        "target": "onavg-ico32",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          40962,
+          10242
+        ],
+        "sum": 57120.125786151024,
+        "nnz": 97000,
+        "sha256": "513a795069a29055dc4004b4f650b4534dad76bbbdd7e6ec1641da9460b5df52"
+      }
+    },
+    "overlap-onavg-ico64-native-onavg-ico64-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico64",
+        "source": "native",
+        "target": "onavg-ico64",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          40962,
+          40962
+        ],
+        "sum": 57120.125786151024,
+        "nnz": 40962,
+        "sha256": "3cc88dcce7b2a0053a58607c30d9dde8289bd9aceb2f6b627086882bf8563abf"
+      }
+    },
+    "overlap-onavg-ico64-onavg-ico32-onavg-ico64-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico64",
+        "source": "onavg-ico32",
+        "target": "onavg-ico64",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          10242,
+          40962
+        ],
+        "sum": 57120.12578615102,
+        "nnz": 97000,
+        "sha256": "7d0ca9f5f73484a561bd8c2f51b0fcfc84041b83bc127ed581c6b81c92094792"
+      }
+    },
+    "overlap-onavg-ico128-native-onavg-ico32-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico128",
+        "source": "native",
+        "target": "onavg-ico32",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          163842,
+          10242
+        ],
+        "sum": 57290.01148866802,
+        "nnz": 265921,
+        "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+      }
+    },
+    "overlap-onavg-ico128-native-onavg-ico64-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico128",
+        "source": "native",
+        "target": "onavg-ico64",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          163842,
+          40962
+        ],
+        "sum": 57290.01148866802,
+        "nnz": 387471,
+        "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+      }
+    },
+    "overlap-onavg-ico128-native-onavg-ico128-n8-t32": {
+      "case": {
+        "kind": "overlap",
+        "native": "onavg-ico128",
+        "source": "native",
+        "target": "onavg-ico128",
+        "n_div": 8,
+        "t_div": 32
+      },
+      "result": {
+        "shape": [
+          163842,
+          163842
+        ],
+        "sum": 57290.011488668024,
+        "nnz": 163842,
+        "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+      }
+    },
+    "areas-onavg-ico32": {
+      "case": {
+        "kind": "areas",
+        "native": "onavg-ico32"
+      },
+      "result": {
+        "shape": [
+          10242
+        ],
+        "sum": 56478.71568318486,
+        "sha256": "07ed90a836f7a642c17dd0b62fbbb3ff59ae2be3f450600104c59ff518bb46f4"
+      }
+    },
+    "areas-onavg-ico64": {
+      "case": {
+        "kind": "areas",
+        "native": "onavg-ico64"
+      },
+      "result": {
+        "shape": [
+          40962
+        ],
+        "sum": 57120.125786151024,
+        "sha256": "5b0a369f47bc3b5ec433a92a6c6acb3f33b193636d09c1b1989d408487a22c54"
+      }
+    }
+  }
+}

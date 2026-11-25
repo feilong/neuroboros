@@ -1,0 +1,212 @@
+"""Golden reference for the Voronoi overlap transforms.
+
+Running this file as a script computes every case with the current
+implementation and writes ``data/voronoi_golden.json``: the shape, sum and
+digest of each output, the environment, and the digests of the inputs.
+Tied shortest paths may be resolved differently with other versions of
+Python or SciPy, so the digests are only valid in the recorded environment
+and with the recorded inputs.
+"""
+
+import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+from functools import lru_cache
+
+import numpy as np
+import scipy
+import scipy.sparse as sparse
+
+import neuroboros as nb
+from neuroboros.surface import Sphere, Surface
+from neuroboros.surface.voronoi import (
+    compute_overlap,
+    inverse_face_mapping,
+    native_voronoi,
+    subdivide_edges,
+    subdivision_voronoi,
+)
+
+GOLDEN_FN = os.path.join(os.path.dirname(__file__), "data", "voronoi_golden.json")
+LR = "l"
+SLOW_SPACES = {"onavg-ico64", "onavg-ico128"}
+
+
+def _overlap(native, source, target, n_div=8, t_div=32):
+    return dict(
+        kind="overlap",
+        native=native,
+        source=source,
+        target=target,
+        n_div=n_div,
+        t_div=t_div,
+    )
+
+
+CASES = [
+    _overlap("onavg-ico32", "native", "onavg-ico8"),
+    *[
+        _overlap("onavg-ico32", "native", "onavg-ico8", n_div, t_div)
+        for n_div in [1, 2, 4]
+        for t_div in [8, 16]
+    ],
+    _overlap("onavg-ico64", "native", "onavg-ico32"),
+    _overlap("onavg-ico64", "native", "onavg-ico64"),
+    _overlap("onavg-ico64", "onavg-ico32", "onavg-ico64"),
+    _overlap("onavg-ico128", "native", "onavg-ico32"),
+    _overlap("onavg-ico128", "native", "onavg-ico64"),
+    _overlap("onavg-ico128", "native", "onavg-ico128"),
+    dict(kind="areas", native="onavg-ico32"),
+    dict(kind="areas", native="onavg-ico64"),
+]
+
+
+def case_id(case):
+    if case["kind"] == "areas":
+        return f"areas-{case['native']}"
+    return "overlap-{native}-{source}-{target}-n{n_div}-t{t_div}".format(**case)
+
+
+def _hash(*arrays):
+    """SHA-256 of the shape and little-endian contents of each array."""
+    h = hashlib.sha256()
+    for a in arrays:
+        a = np.asarray(a)
+        dtype = "<f8" if np.issubdtype(a.dtype, np.inexact) else "<i8"
+        h.update(np.asarray(a.shape, dtype="<i8").tobytes())
+        h.update(np.ascontiguousarray(a, dtype=dtype).tobytes())
+    return h.hexdigest()
+
+
+def digest(result):
+    """Digest of an array, or of a sparse matrix in canonical CSR form,
+    including its shape."""
+    if not sparse.issparse(result):
+        return _hash(result)
+    mat = sparse.csr_matrix(result, copy=True)
+    mat.sort_indices()
+    return _hash(np.asarray(mat.shape), mat.indptr, mat.indices, mat.data)
+
+
+def record(result):
+    rec = dict(shape=list(result.shape), sum=float(result.sum()))
+    if sparse.issparse(result):
+        rec["nnz"] = int(result.nnz)
+    rec["sha256"] = digest(result)
+    return rec
+
+
+def check(result, expected):
+    """Assert that ``result`` matches a record, checking the shape first."""
+    shape = list(result.shape)
+    assert shape == expected["shape"], f"shape {shape} != {expected['shape']}"
+    assert record(result) == expected
+
+
+def environment():
+    return dict(
+        python=platform.python_version(),
+        numpy=np.__version__,
+        scipy=scipy.__version__,
+        platform=platform.platform(),
+        machine=platform.machine(),
+        byteorder=sys.byteorder,
+    )
+
+
+def inputs(case):
+    """Digests of the input arrays of a case."""
+    native = case["native"]
+    coords, faces = nb.geometry("midthickness", LR, native)
+    digests = {
+        f"{native}/midthickness": _hash(coords),
+        f"{native}/faces": _hash(faces),
+    }
+    templates = {case.get("source"), case.get("target")} - {None, "native"}
+    # The native sphere places the template points on the native mesh.
+    for space in sorted(templates | {native} if templates else []):
+        sphere = nb.geometry("sphere.reg", LR, space, vertices_only=True)
+        digests[f"{space}/sphere.reg"] = _hash(sphere)
+    return digests
+
+
+@lru_cache(maxsize=1)
+def _prepare(native, n_div):
+    coords, faces = nb.geometry("midthickness", LR, native)
+    surf = Surface(coords, faces)
+    new_coords, e_mapping, graph = subdivide_edges(surf.coords, faces, n_div)
+    coords = np.concatenate([surf.coords, new_coords])
+    return surf, coords, e_mapping, graph
+
+
+def _labels(native, n_div, name):
+    surf, coords, e_mapping, graph = _prepare(native, n_div)
+    if name == "native":
+        nn, nnd = native_voronoi(coords, surf.faces, e_mapping, graph)
+        return nn, nnd, {}, surf.nv
+    sphere = nb.geometry("sphere.reg", LR, native, vertices_only=True)
+    points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
+    f_indices, weights = Sphere(sphere, surf.faces).barycentric(
+        points, eps=1e-7, return_sparse=False
+    )
+    nn, nnd = subdivision_voronoi(
+        coords, surf.faces, e_mapping, graph, f_indices, weights
+    )
+    f_inv = inverse_face_mapping(f_indices, weights, coords, surf.faces)
+    return nn, nnd, f_inv, points.shape[0]
+
+
+def compute(case):
+    """Compute a case with the current implementation."""
+    if case["kind"] == "areas":
+        coords, faces = nb.geometry("midthickness", LR, case["native"])
+        return Surface(coords, faces).vertex_areas_nn()
+    native, n_div = case["native"], case["n_div"]
+    surf, coords, e_mapping, _ = _prepare(native, n_div)
+    nn1, nnd1, f_inv1, n1 = _labels(native, n_div, case["source"])
+    nn2, nnd2, f_inv2, n2 = _labels(native, n_div, case["target"])
+    return compute_overlap(
+        surf.faces,
+        surf.face_areas,
+        e_mapping,
+        coords,
+        nn1,
+        nnd1,
+        f_inv1,
+        nn2,
+        nnd2,
+        f_inv2,
+        n1,
+        n2,
+        t_div=case["t_div"],
+    )
+
+
+def load():
+    with open(GOLDEN_FN) as f:
+        return json.load(f)
+
+
+def main():
+    source = subprocess.run(
+        ["git", "describe", "--always", "--dirty"],
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(__file__),
+    ).stdout.strip()
+    golden = dict(source=source, environment=environment(), inputs={}, cases={})
+    for case in CASES:
+        print(case_id(case), flush=True)
+        golden["inputs"].update(inputs(case))
+        golden["cases"][case_id(case)] = dict(case=case, result=record(compute(case)))
+    os.makedirs(os.path.dirname(GOLDEN_FN), exist_ok=True)
+    with open(GOLDEN_FN, "w") as f:
+        json.dump(golden, f, indent=2)
+        f.write("\n")
+
+
+if __name__ == "__main__":
+    main()
