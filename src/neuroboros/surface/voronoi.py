@@ -45,7 +45,6 @@ def subdivide_edges(coords, faces, n_div):
     n_edges = faces.shape[0] * 3 // 2
     nv_new = n_edges * (n_div - 1)
     new_coords = np.zeros((nv_new, 3), dtype=coords.dtype)
-    print(new_coords.shape)
     neighbors = {}
 
     nv = coords.shape[0]
@@ -86,8 +85,6 @@ def subdivide_edges(coords, faces, n_div):
             # connecting points on an edge and the opposite point
             idx2, c2 = c, coords[c]
             for idx1, c1 in zip(indices, cc):
-                if idx1 not in neighbors:
-                    neighbors[idx1] = {}
                 if idx1 not in neighbors[idx2]:
                     d = np.linalg.norm(c1 - c2)
                     neighbors[idx2][idx1] = d
@@ -254,7 +251,6 @@ def subdivision_voronoi(
                     np.isinf(nnd).sum(),
                 )
         max_dist *= 1.5
-    print(nnd.max())
     return nn, nnd
 
 
@@ -303,7 +299,6 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         ]
     )
     max_dist = max_dist * 0.5 + 1e-3
-    print(max_dist)
 
     seeds = []
 
