@@ -5,6 +5,8 @@ import scipy.sparse as sparse
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial.distance import cdist
 
+from .properties import compute_face_areas
+
 # Preserve the original import path for callers of the legacy helper.
 from .voronoi_legacy import dijkstra_distances as dijkstra_distances
 
@@ -554,6 +556,110 @@ def overlap_transform(
         t_div=t_div,
     )
     return mat
+
+
+class VoronoiOverlap:
+    """Overlap areas between the geodesic Voronoi cells of point sets.
+
+    The point sets are the vertices of the mesh (``"native"``) and the point
+    sets added with ``add``. ``transform(a, b)[i, j]`` is the area of the
+    intersection of cell ``i`` of ``a`` and cell ``j`` of ``b``, measured on
+    ``coords``.
+
+    Parameters
+    ----------
+    coords : ndarray of shape (nv, 3)
+        The surface on which areas and geodesic distances are measured,
+        usually the midthickness.
+    faces : ndarray of shape (nf, 3)
+        The vertex indices of each triangle face.
+    sphere : ndarray of shape (nv, 3) or None
+        The registered sphere (e.g., sphere.reg) with the same faces, used by
+        ``add`` to place point sets given by their coordinates.
+    n_div : int
+        The number of segments to divide each edge into for the graph.
+    t_div : int
+        Each face is sampled with ``t_div**2`` points.
+    cache_samples : bool
+        Whether to keep the sample labels of each point set.
+    """
+
+    def __init__(
+        self, coords, faces, sphere=None, n_div=8, t_div=32, cache_samples=True
+    ):
+        coords = _finite_copy(coords, "coords")
+        faces = np.array(faces)
+        if coords.ndim != 2 or coords.shape[1] != 3:
+            raise ValueError(f"coords must have shape (nv, 3), not {coords.shape}.")
+        if faces.ndim != 2 or faces.shape[1] != 3:
+            raise ValueError(f"faces must have shape (nf, 3), not {faces.shape}.")
+        if not np.issubdtype(faces.dtype, np.integer):
+            raise ValueError(f"faces must be integers, not {faces.dtype}.")
+        if faces.size and (faces.min() < 0 or faces.max() >= coords.shape[0]):
+            raise ValueError("faces contain vertex indices out of range.")
+        # Unsigned faces would turn node indices into floats when combined
+        # with signed indices.
+        faces = faces.astype(np.intp, copy=False)
+        if sphere is not None:
+            sphere = _finite_copy(sphere, "sphere")
+            if sphere.shape != coords.shape:
+                raise ValueError(
+                    f"sphere must have the shape of coords {coords.shape}, "
+                    f"not {sphere.shape}."
+                )
+        for name, value in [("n_div", n_div), ("t_div", t_div)]:
+            if not isinstance(value, (int, np.integer)) or value < 1:
+                raise ValueError(f"{name} must be a positive integer, not {value!r}.")
+
+        self.coords = coords
+        self.faces = faces
+        self.sphere = sphere
+        self.n_div = int(n_div)
+        self.t_div = int(t_div)
+        self.cache_samples = cache_samples
+        self.face_areas = compute_face_areas(coords, faces)
+
+        _, face_edge_ids, edge_points, new_coords, graph = _subdivided_graph(
+            coords, faces, self.n_div
+        )
+        self._node_coords = np.concatenate([coords, new_coords])
+        self._graph = graph
+        self._face_nodes = _face_nodes(faces, face_edge_ids, edge_points)
+        self._point_sets = {}
+
+    @property
+    def names(self):
+        """The names of the point sets, starting with ``"native"``."""
+        return ("native", *self._point_sets)
+
+
+def _finite_copy(x, name):
+    """Copy an array as float64, checking that every value is finite."""
+    x = np.array(x, dtype=float)
+    if not np.all(np.isfinite(x)):
+        raise ValueError(f"{name} must contain only finite values.")
+    return x
+
+
+def _face_nodes(faces, face_edge_ids, edge_points):
+    """Return the boundary nodes of each face in candidate order.
+
+    For a face with sorted vertices a < b < c, the order is the points on the
+    edges (a, b), (a, c) and (b, c), then a, b and c, as in
+    ``compute_overlap``. The result has shape (nf, 3 * n_div).
+    """
+    # Position of a, b and c in each face.
+    order = np.argsort(faces, axis=1, kind="stable")
+    rows = np.arange(len(faces))[:, np.newaxis]
+    # face_edge_ids follows the local pairs (0, 1), (1, 2), (2, 0), so the
+    # edge that leaves out position k is local edge (k + 1) % 3. Edges (a, b),
+    # (a, c) and (b, c) leave out the positions of c, b and a.
+    local_edges = (order[:, ::-1] + 1) % 3
+    sorted_edge_ids = face_edge_ids[rows, local_edges]
+    edge_nodes = edge_points[sorted_edge_ids].reshape(
+        len(faces), 3 * edge_points.shape[1]
+    )
+    return np.concatenate([edge_nodes, faces[rows, order]], axis=1)
 
 
 """
