@@ -32,3 +32,17 @@ def test_subdivision_voronoi_legacy_arguments(
     np.testing.assert_allclose(nnd, expected_nnd)
     assert np.all(nn == 0)
     assert np.all(np.isfinite(nnd))
+
+
+@pytest.mark.parametrize("positional", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_native_voronoi_legacy_arguments(subdivided_mesh, positional, verbose):
+    expected_nn, expected_nnd = voronoi.native_voronoi(*subdivided_mesh)
+    if positional:
+        nn, nnd = voronoi.native_voronoi(*subdivided_mesh, verbose)
+    else:
+        nn, nnd = voronoi.native_voronoi(*subdivided_mesh, verbose=verbose)
+    np.testing.assert_array_equal(nn, expected_nn)
+    np.testing.assert_allclose(nnd, expected_nnd)
+    np.testing.assert_array_equal(nn[:4], np.arange(4))
+    np.testing.assert_array_equal(nnd[:4], np.zeros(4))

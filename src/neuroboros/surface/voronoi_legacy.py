@@ -108,3 +108,100 @@ def subdivision_voronoi(
                 )
         max_dist *= 1.5
     return nn, nnd
+
+
+def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
+    """Voronoi diagram on the original mesh.
+
+    This function estimates the nearest vertex on the original mesh for each
+    vertex of the subdivided mesh. The subdivided mesh is used to increase the
+    accuracy of the estimated geodesic distances using Dijkstra's algorithm.
+
+    Parameters
+    ----------
+    coords : ndarray of shape (nv, 3)
+        The coordinates of the vertices of the subdivided mesh.
+    faces : ndarray of shape (nf, 3)
+        The vertex indices of each triangle face of the original mesh.
+    e_mapping : dict
+        The mapping from the original edges to the new vertices. The keys are
+        tuples of sorted vertex indices of the original edges. The values are
+        the indices of the new vertices.
+    neighbors : dict
+        The neighbors of each vertex. The keys are the vertex indices. The
+        values are dictionaries. The keys of the dictionaries are the indices
+        of the neighboring vertices. The values of the dictionaries are the
+        distances between the vertex and the neighboring vertices.
+    verbose : bool, default=False
+        Whether to print the progress or not.
+
+    Returns
+    -------
+    nn : ndarray of shape (nv,)
+        The indices of the nearest vertex on the original mesh for each vertex
+        of the subdivided mesh.
+    nnd : ndarray of shape (nv,)
+        The estimated geodesic distances between each vertex of the subdivided
+        mesh and the nearest vertex on the original mesh.
+    """
+    nv = coords.shape[0]
+    nn = np.full((nv,), -1, dtype=int)
+    nnd = np.full((nv,), np.inf)
+    max_dist = np.max(
+        [
+            np.linalg.norm(coords[faces[:, 0]] - coords[faces[:, 1]], axis=1).max(),
+            np.linalg.norm(coords[faces[:, 1]] - coords[faces[:, 2]], axis=1).max(),
+            np.linalg.norm(coords[faces[:, 2]] - coords[faces[:, 0]], axis=1).max(),
+        ]
+    )
+    max_dist = max_dist * 0.5 + 1e-3
+
+    seeds = []
+
+    for f in faces:
+        f = np.sort(f)
+        cc1 = coords[f]
+        a, b, c = f
+        for i, e in enumerate([(b, c), (a, c), (a, b)]):
+            indices = e_mapping[e]
+            cc2 = coords[indices]
+            d = cdist(cc1, cc2)
+
+            min_idx = np.argmin(d, axis=0)
+            # wide short triangle
+            if np.any(min_idx == i):
+                seeds.append(f[i])
+            d = d.min(axis=0)
+            mask = d < nnd[indices]
+
+            nnd[indices[mask]] = d[mask]
+            nn[indices[mask]] = f[min_idx[mask]]
+        nn[f] = f
+        nnd[f] = 0.0
+    if verbose:
+        print(np.isfinite(nnd).mean(), nnd.max())
+
+    seeds = np.unique(seeds)
+    if verbose:
+        print(len(seeds), seeds[:10])
+    for i, seed in enumerate(seeds):
+        candidates = [(0.0, seed)]
+        d = dijkstra_distances(nv, candidates, neighbors, max_dist=max_dist)
+        mask = d < nnd
+        nn[mask] = seed
+        nnd[mask] = d[mask]
+        if verbose and i % 10000 == 0:
+            print(
+                datetime.now(),
+                i,
+                seed,
+                mask.sum(),
+                nnd.max(),
+                np.isfinite(d).sum(),
+                d.shape,
+                d.max(),
+                d.min(),
+                np.isinf(nnd).sum(),
+            )
+
+    return nn, nnd

@@ -1,6 +1,5 @@
 import heapq
 import warnings
-from datetime import datetime
 
 import numpy as np
 import scipy.sparse as sparse
@@ -300,7 +299,8 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         of the neighboring vertices. The values of the dictionaries are the
         distances between the vertex and the neighboring vertices.
     verbose : bool, default=False
-        Whether to print the progress or not.
+        Retained for backward compatibility and ignored. The multi-source
+        search does not report per-source progress.
 
     Returns
     -------
@@ -312,64 +312,15 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         mesh and the nearest vertex on the original mesh.
     """
     nv = coords.shape[0]
-    nn = np.full((nv,), -1, dtype=int)
-    nnd = np.full((nv,), np.inf)
-    max_dist = np.max(
-        [
-            np.linalg.norm(coords[faces[:, 0]] - coords[faces[:, 1]], axis=1).max(),
-            np.linalg.norm(coords[faces[:, 1]] - coords[faces[:, 2]], axis=1).max(),
-            np.linalg.norm(coords[faces[:, 2]] - coords[faces[:, 0]], axis=1).max(),
-        ]
+    rows, cols, dists = neighbors_to_coo(neighbors)
+    graph = sparse.csr_matrix((dists, (rows, cols)), shape=(nv, nv))
+    nnd, _, nn = dijkstra(
+        graph,
+        indices=np.unique(faces),
+        return_predecessors=True,
+        min_only=True,
     )
-    max_dist = max_dist * 0.5 + 1e-3
-
-    seeds = []
-
-    for f in faces:
-        f = np.sort(f)
-        cc1 = coords[f]
-        a, b, c = f
-        for i, e in enumerate([(b, c), (a, c), (a, b)]):
-            indices = e_mapping[e]
-            cc2 = coords[indices]
-            d = cdist(cc1, cc2)
-
-            min_idx = np.argmin(d, axis=0)
-            # wide short triangle
-            if np.any(min_idx == i):
-                seeds.append(f[i])
-            d = d.min(axis=0)
-            mask = d < nnd[indices]
-
-            nnd[indices[mask]] = d[mask]
-            nn[indices[mask]] = f[min_idx[mask]]
-        nn[f] = f
-        nnd[f] = 0.0
-    if verbose:
-        print(np.isfinite(nnd).mean(), nnd.max())
-
-    seeds = np.unique(seeds)
-    if verbose:
-        print(len(seeds), seeds[:10])
-    for i, seed in enumerate(seeds):
-        candidates = [(0.0, seed)]
-        d = dijkstra_distances(nv, candidates, neighbors, max_dist=max_dist)
-        mask = d < nnd
-        nn[mask] = seed
-        nnd[mask] = d[mask]
-        if verbose and i % 10000 == 0:
-            print(
-                datetime.now(),
-                i,
-                seed,
-                mask.sum(),
-                nnd.max(),
-                np.isfinite(d).sum(),
-                d.shape,
-                d.max(),
-                d.min(),
-                np.isinf(nnd).sum(),
-            )
+    nn = np.where(nn >= 0, nn, -1)
 
     return nn, nnd
 
