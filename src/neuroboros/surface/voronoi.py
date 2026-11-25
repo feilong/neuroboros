@@ -70,6 +70,14 @@ def subdivide_edges(coords, faces, n_div):
                 indices = (count + nv - 1) + arng
                 e_mapping[e] = indices
                 count += n_div - 1
+
+                for idx in indices:
+                    neighbors[idx] = {}
+                d = np.linalg.norm(coords[e[1]] - coords[e[0]]) / n_div
+                chain = [e[0], *indices, e[1]]
+                for idx1, idx2 in zip(chain[:-1], chain[1:]):
+                    neighbors[idx1][idx2] = d
+                    neighbors[idx2][idx1] = d
             else:
                 indices = e_mapping[e]
                 cc = new_coords[indices - nv]
@@ -95,14 +103,6 @@ def subdivide_edges(coords, faces, n_div):
                         d = np.linalg.norm(c1 - c2)
                         neighbors[idx2][idx1] = d
                         neighbors[idx1][idx2] = d
-
-        # connecting points of the original triangle
-        for i in f:
-            for j in f:
-                if i != j and i not in neighbors[j]:
-                    d = np.linalg.norm(coords[i] - coords[j])
-                    neighbors[i][j] = d
-                    neighbors[j][i] = d
 
     return new_coords, e_mapping, neighbors
 
