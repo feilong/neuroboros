@@ -102,3 +102,23 @@ def test_subdivide_edges_duplicate_faces(duplicate):
     np.testing.assert_array_equal(new_coords, expected[0])
     assert mapping.keys() == expected[1].keys()
     assert (neighbors != expected[2]).nnz == 0
+
+
+@pytest.mark.parametrize("n_div", [1, 2, 8])
+def test_subdivided_graph_arrays(n_div):
+    rng = np.random.default_rng(0)
+    coords = rng.standard_normal((4, 3))
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    edges, face_edge_ids, edge_points, new_coords, neighbors = (
+        voronoi._subdivided_graph(coords, faces, n_div)
+    )
+    expected = voronoi.subdivide_edges(coords, faces, n_div)
+    np.testing.assert_array_equal(new_coords, expected[0])
+    assert (neighbors != expected[2]).nnz == 0
+    assert edges.shape == (6, 2)
+    assert edge_points.shape == (6, n_div - 1)
+    assert list(map(tuple, edges.tolist())) == list(expected[1])
+    for e, indices in zip(edges, edge_points):
+        np.testing.assert_array_equal(indices, expected[1][tuple(e)])
+    pairs = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]], axis=2)
+    np.testing.assert_array_equal(edges[face_edge_ids], pairs)

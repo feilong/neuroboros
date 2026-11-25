@@ -50,41 +50,23 @@ def _connection_distances(coords, rows, cols):
     return distances
 
 
-def subdivide_edges(coords, faces, n_div):
-    """Subdivide each edge into ``n_div`` parts.
-
-    This function adds new vertices to the mesh. The new vertices are placed
-    on each edge of the mesh. The number of new vertices on each edge is
-    ``n_div - 1``, which means each edge is now divided into ``n_div`` parts.
-
-    The new vertices are usually used to increase the accuracy of the
-    estimated geodesic distances using Dijkstra's algorithm.
-
-    Parameters
-    ----------
-    coords : ndarray of shape (nv, 3)
-        The coordinates of the vertices.
-    faces : ndarray of shape (nf, 3)
-        The indices of the vertices of each triangle face.
-    n_div : int
-        The number of segments to divide each edge into.
-
+def _subdivided_graph(coords, faces, n_div):
+    """Subdivide each edge into ``n_div`` parts and build the distance graph.
 
     Returns
     -------
+    edges : ndarray of shape (n_edges, 2)
+        Unique edges in encounter order, with sorted vertex indices.
+    face_edge_ids : ndarray of shape (nf, 3)
+        The edges of each face, for the local vertex pairs (0, 1), (1, 2),
+        (2, 0).
+    edge_points : ndarray of shape (n_edges, n_div - 1)
+        The indices of the new vertices on each edge, from the lower to the
+        higher endpoint index. Indices start from ``nv``.
     new_coords : ndarray of shape (nv_new, 3)
-        The coordinates of the new vertices. It should be concatenated to the
-        original coordinates to get the full set of vertex coordinates.
-    e_mapping : dict
-        The mapping from the original edges to the new vertices. The keys are
-        tuples of sorted vertex indices of the original edges. The values are
-        the indices of the new vertices. Vertex indices start from ``nv``.
+        The coordinates of the new vertices.
     neighbors : scipy.sparse.csr_matrix of shape (nv + nv_new, nv + nv_new)
-        The graph connecting the original and new vertices. Each stored entry
-        is the distance between two neighboring vertices. Consecutive points
-        along each edge are connected, and each new vertex is connected to the
-        new vertices on the other edges and to the opposite vertex of each
-        face it is on.
+        The graph described in ``subdivide_edges``.
     """
     nv = coords.shape[0]
     n_edge_points = n_div - 1
@@ -101,7 +83,6 @@ def subdivide_edges(coords, faces, n_div):
     end_coords = coords[edges[:, 1], np.newaxis]
     new_coords = (end_coords * steps + start_coords * (n_div - steps)) / n_div
     new_coords = new_coords.reshape(-1, 3).astype(coords.dtype)
-    e_mapping = dict(zip(map(tuple, edges.tolist()), edge_points))
 
     # Collect each connection once; add its reverse when building the graph.
     # Start with consecutive points along each edge, including both endpoints.
@@ -148,6 +129,49 @@ def subdivide_edges(coords, faces, n_div):
         ),
         shape=(n_vertices, n_vertices),
     )
+    return edges, face_edge_ids, edge_points, new_coords, neighbors
+
+
+def subdivide_edges(coords, faces, n_div):
+    """Subdivide each edge into ``n_div`` parts.
+
+    This function adds new vertices to the mesh. The new vertices are placed
+    on each edge of the mesh. The number of new vertices on each edge is
+    ``n_div - 1``, which means each edge is now divided into ``n_div`` parts.
+
+    The new vertices are usually used to increase the accuracy of the
+    estimated geodesic distances using Dijkstra's algorithm.
+
+    Parameters
+    ----------
+    coords : ndarray of shape (nv, 3)
+        The coordinates of the vertices.
+    faces : ndarray of shape (nf, 3)
+        The indices of the vertices of each triangle face.
+    n_div : int
+        The number of segments to divide each edge into.
+
+
+    Returns
+    -------
+    new_coords : ndarray of shape (nv_new, 3)
+        The coordinates of the new vertices. It should be concatenated to the
+        original coordinates to get the full set of vertex coordinates.
+    e_mapping : dict
+        The mapping from the original edges to the new vertices. The keys are
+        tuples of sorted vertex indices of the original edges. The values are
+        the indices of the new vertices. Vertex indices start from ``nv``.
+    neighbors : scipy.sparse.csr_matrix of shape (nv + nv_new, nv + nv_new)
+        The graph connecting the original and new vertices. Each stored entry
+        is the distance between two neighboring vertices. Consecutive points
+        along each edge are connected, and each new vertex is connected to the
+        new vertices on the other edges and to the opposite vertex of each
+        face it is on.
+    """
+    edges, _, edge_points, new_coords, neighbors = _subdivided_graph(
+        coords, faces, n_div
+    )
+    e_mapping = dict(zip(map(tuple, edges.tolist()), edge_points))
     return new_coords, e_mapping, neighbors
 
 
