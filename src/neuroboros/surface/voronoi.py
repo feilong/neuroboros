@@ -443,8 +443,9 @@ def compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww):
     u = np.unique(nn1)
 
     # The same vertex of the target mesh is the nearest for all vertices on
-    # the edges of the triangular face.
-    if len(u) == 1 and len(f_inv) == 0:
+    # the edges of the triangular face, and no vertex of the target mesh is
+    # inside the face.
+    if len(u) == 1 and f_idx not in f_inv:
         return {u[0]: np.ones((ww.shape[0],), dtype=bool)}
 
     cc1 = [coords[indices]]
