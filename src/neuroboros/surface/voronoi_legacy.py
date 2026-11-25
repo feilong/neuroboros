@@ -1,7 +1,8 @@
 """
-Previous implementations of the Voronoi diagrams in ``voronoi.py``, which
-run Dijkstra's algorithm in pure Python once per source vertex. They give
-the same results up to ties, but are much slower.
+Previous implementations of functions in ``voronoi.py``, written with Python
+loops and dicts; the Voronoi diagrams run Dijkstra's algorithm once per
+source vertex. They give the same results up to ties and rounding, but are
+much slower.
 """
 
 import heapq
@@ -10,6 +11,103 @@ from datetime import datetime
 
 import numpy as np
 from scipy.spatial.distance import cdist
+
+
+def subdivide_edges(coords, faces, n_div):
+    """Subdivide each edge into ``n_div`` parts.
+
+    This function adds new vertices to the mesh. The new vertices are placed
+    on each edge of the mesh. The number of new vertices on each edge is
+    ``n_div - 1``, which means each edge is now divided into ``n_div`` parts.
+
+    The new vertices are usually used to increase the accuracy of the
+    estimated geodesic distances using Dijkstra's algorithm.
+
+    Parameters
+    ----------
+    coords : ndarray of shape (nv, 3)
+        The coordinates of the vertices.
+    faces : ndarray of shape (nf, 3)
+        The indices of the vertices of each triangle face.
+    n_div : int
+        The number of segments to divide each edge into.
+
+
+    Returns
+    -------
+    new_coords : ndarray of shape (nv_new, 3)
+        The coordinates of the new vertices. It should be concatenated to the
+        original coordinates to get the full set of vertex coordinates.
+    e_mapping : dict
+        The mapping from the original edges to the new vertices. The keys are
+        tuples of sorted vertex indices of the original edges. The values are
+        the indices of the new vertices. Vertex indices start from ``nv``.
+    neighbors : dict
+        The neighbors of each vertex. The keys are the vertex indices. The
+        values are dictionaries. The keys of the dictionaries are the indices
+        of the neighboring vertices. The values of the dictionaries are the
+        distances between the vertex and the neighboring vertices.
+    """
+    n_edges = faces.shape[0] * 3 // 2
+    nv_new = n_edges * (n_div - 1)
+    new_coords = np.zeros((nv_new, 3), dtype=coords.dtype)
+    neighbors = {}
+
+    nv = coords.shape[0]
+    count = 0
+    e_mapping = {}
+    arng = np.arange(1, n_div)
+    for f in faces:
+        for i in f:
+            if i not in neighbors:
+                neighbors[i] = {}
+
+        steiner = []
+        for i, j, k in [[0, 1, 2], [1, 2, 0], [2, 0, 1]]:
+            a, b, c = f[[i, j, k]]
+            e = (a, b) if a < b else (b, a)
+            if e not in e_mapping:
+                cc = (
+                    coords[[e[1]]] * arng[:, np.newaxis]
+                    + coords[e[0]] * (n_div - arng[:, np.newaxis])
+                ) / n_div
+                new_coords[count : count + n_div - 1] = cc
+                indices = (count + nv - 1) + arng
+                e_mapping[e] = indices
+                count += n_div - 1
+
+                for idx in indices:
+                    neighbors[idx] = {}
+                d = np.linalg.norm(coords[e[1]] - coords[e[0]]) / n_div
+                chain = [e[0], *indices, e[1]]
+                for idx1, idx2 in zip(chain[:-1], chain[1:]):
+                    neighbors[idx1][idx2] = d
+                    neighbors[idx2][idx1] = d
+            else:
+                indices = e_mapping[e]
+                cc = new_coords[indices - nv]
+            steiner.append([cc, indices])
+
+            # connecting points on an edge and the opposite point
+            idx2, c2 = c, coords[c]
+            for idx1, c1 in zip(indices, cc):
+                if idx1 not in neighbors[idx2]:
+                    d = np.linalg.norm(c1 - c2)
+                    neighbors[idx2][idx1] = d
+                    neighbors[idx1][idx2] = d
+
+        # connecting points on an edge and points on another edge
+        for i, j in [[0, 1], [1, 2], [2, 0]]:
+            cc1, indices1 = steiner[i]
+            cc2, indices2 = steiner[j]
+            for idx1, c1 in zip(indices1, cc1):
+                for idx2, c2 in zip(indices2, cc2):
+                    if idx1 not in neighbors[idx2]:
+                        d = np.linalg.norm(c1 - c2)
+                        neighbors[idx2][idx1] = d
+                        neighbors[idx1][idx2] = d
+
+    return new_coords, e_mapping, neighbors
 
 
 def dijkstra_distances(nv, candidates, neighbors, max_dist=None):

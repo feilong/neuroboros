@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from neuroboros.surface import voronoi
+from neuroboros.surface import voronoi, voronoi_legacy
 
 
 @pytest.fixture
@@ -25,9 +25,7 @@ def test_subdivision_voronoi_legacy_arguments(
     if positional:
         nn, nnd = voronoi.subdivision_voronoi(*args, max_dist, verbose)
     else:
-        nn, nnd = voronoi.subdivision_voronoi(
-            *args, max_dist=max_dist, verbose=verbose
-        )
+        nn, nnd = voronoi.subdivision_voronoi(*args, max_dist=max_dist, verbose=verbose)
     np.testing.assert_array_equal(nn, expected_nn)
     np.testing.assert_allclose(nnd, expected_nnd)
     assert np.all(nn == 0)
@@ -63,3 +61,44 @@ def test_dijkstra_distances_original_import_path():
         dijkstra_distances(3, [(0.0, 0)], neighbors, max_dist=1.5),
         [0.0, 1.0, np.inf],
     )
+
+
+@pytest.mark.parametrize("n_div", [1, 2, 3, 8])
+def test_subdivide_edges_matches_legacy(n_div):
+    rng = np.random.default_rng(0)
+    coords = rng.standard_normal((4, 3))
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    new_coords, mapping, neighbors = voronoi.subdivide_edges(coords, faces, n_div)
+    expected = voronoi_legacy.subdivide_edges(coords, faces, n_div)
+    np.testing.assert_array_equal(new_coords, expected[0])
+    assert mapping.keys() == expected[1].keys()
+    for e, indices in mapping.items():
+        np.testing.assert_array_equal(indices, expected[1][e])
+    nv = coords.shape[0] + new_coords.shape[0]
+    expected_graph = voronoi.neighbors_to_graph(expected[2], nv)
+    assert (neighbors != expected_graph).nnz == 0
+
+
+def test_subdivide_edges_integer_coords():
+    coords = np.array(
+        [[0, 0, 0], [50000, 0, 0], [0, 50000, 0], [0, 0, 50000]], dtype=np.int32
+    )
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    neighbors = voronoi.subdivide_edges(coords, faces, 2)[2]
+    expected = voronoi.subdivide_edges(coords.astype(float), faces, 2)[2]
+    assert np.all(np.isfinite(neighbors.data))
+    assert (neighbors != expected).nnz == 0
+
+
+@pytest.mark.parametrize("duplicate", [[0, 1, 2], [2, 1, 0]])
+def test_subdivide_edges_duplicate_faces(duplicate):
+    rng = np.random.default_rng(0)
+    coords = rng.standard_normal((4, 3))
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    expected = voronoi.subdivide_edges(coords, faces, 3)
+    new_coords, mapping, neighbors = voronoi.subdivide_edges(
+        coords, np.vstack([faces, duplicate]), 3
+    )
+    np.testing.assert_array_equal(new_coords, expected[0])
+    assert mapping.keys() == expected[1].keys()
+    assert (neighbors != expected[2]).nnz == 0

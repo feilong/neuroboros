@@ -9,6 +9,47 @@ from scipy.spatial.distance import cdist
 from .voronoi_legacy import dijkstra_distances as dijkstra_distances
 
 
+def _row_norms(x):
+    """Compute row norms using the dot product used by single-row norms."""
+    if not np.issubdtype(x.dtype, np.inexact):
+        x = x.astype(float)
+    squared_norms = np.matmul(x[:, np.newaxis, :], x[:, :, np.newaxis])
+    return np.sqrt(squared_norms[:, 0, 0])
+
+
+def _mesh_edges(faces, nv):
+    """Return unique edges in encounter order and each face's three edge IDs.
+
+    Edge endpoints are sorted by vertex index. The returned arrays have
+    shapes (n_edges, 2) and (n_faces, 3), respectively; face edges follow the
+    local vertex pairs (0, 1), (1, 2), (2, 0).
+    """
+    face_edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]], axis=2).reshape(-1, 2)
+    edge_keys = face_edges[:, 0].astype(np.int64) * nv + face_edges[:, 1]
+    _, first_occurrence, sorted_edge_ids = np.unique(
+        edge_keys, return_index=True, return_inverse=True
+    )
+
+    # np.unique numbers edges by key. Remap those IDs to encounter order to
+    # preserve the vertex numbering used by the legacy implementation.
+    encounter_order = np.argsort(first_occurrence)
+    edges = face_edges[first_occurrence[encounter_order]]
+    sorted_to_encounter = np.empty_like(encounter_order)
+    sorted_to_encounter[encounter_order] = np.arange(len(encounter_order))
+    face_edge_ids = sorted_to_encounter[sorted_edge_ids].reshape(-1, 3)
+    return edges, face_edge_ids
+
+
+def _connection_distances(coords, rows, cols):
+    """Compute connection lengths in chunks to limit temporary coordinate arrays."""
+    distances = np.empty(rows.shape)
+    chunk_size = 2**22
+    for start in range(0, len(rows), chunk_size):
+        chunk = slice(start, start + chunk_size)
+        distances[chunk] = _row_norms(coords[rows[chunk]] - coords[cols[chunk]])
+    return distances
+
+
 def subdivide_edges(coords, faces, n_div):
     """Subdivide each edge into ``n_div`` parts.
 
@@ -38,71 +79,75 @@ def subdivide_edges(coords, faces, n_div):
         The mapping from the original edges to the new vertices. The keys are
         tuples of sorted vertex indices of the original edges. The values are
         the indices of the new vertices. Vertex indices start from ``nv``.
-    neighbors : dict
-        The neighbors of each vertex. The keys are the vertex indices. The
-        values are dictionaries. The keys of the dictionaries are the indices
-        of the neighboring vertices. The values of the dictionaries are the
-        distances between the vertex and the neighboring vertices.
+    neighbors : scipy.sparse.csr_matrix of shape (nv + nv_new, nv + nv_new)
+        The graph connecting the original and new vertices. Each stored entry
+        is the distance between two neighboring vertices. Consecutive points
+        along each edge are connected, and each new vertex is connected to the
+        new vertices on the other edges and to the opposite vertex of each
+        face it is on.
     """
-    n_edges = faces.shape[0] * 3 // 2
-    nv_new = n_edges * (n_div - 1)
-    new_coords = np.zeros((nv_new, 3), dtype=coords.dtype)
-    neighbors = {}
-
     nv = coords.shape[0]
-    count = 0
-    e_mapping = {}
-    arng = np.arange(1, n_div)
-    for f in faces:
-        for i in f:
-            if i not in neighbors:
-                neighbors[i] = {}
+    n_edge_points = n_div - 1
+    steps = np.arange(1, n_div)[:, np.newaxis]
 
-        steiner = []
-        for i, j, k in [[0, 1, 2], [1, 2, 0], [2, 0, 1]]:
-            a, b, c = f[[i, j, k]]
-            e = (a, b) if a < b else (b, a)
-            if e not in e_mapping:
-                cc = (
-                    coords[[e[1]]] * arng[:, np.newaxis]
-                    + coords[e[0]] * (n_div - arng[:, np.newaxis])
-                ) / n_div
-                new_coords[count : count + n_div - 1] = cc
-                indices = (count + nv - 1) + arng
-                e_mapping[e] = indices
-                count += n_div - 1
+    edges, face_edge_ids = _mesh_edges(faces, nv)
 
-                for idx in indices:
-                    neighbors[idx] = {}
-                d = np.linalg.norm(coords[e[1]] - coords[e[0]]) / n_div
-                chain = [e[0], *indices, e[1]]
-                for idx1, idx2 in zip(chain[:-1], chain[1:]):
-                    neighbors[idx1][idx2] = d
-                    neighbors[idx2][idx1] = d
-            else:
-                indices = e_mapping[e]
-                cc = new_coords[indices - nv]
-            steiner.append([cc, indices])
+    # Each row contains the new vertex indices along one edge, from low to
+    # high endpoint index. Interpolation has shape (n_edges, n_edge_points, 3).
+    edge_points = nv + np.arange(len(edges) * n_edge_points).reshape(
+        len(edges), n_edge_points
+    )
+    start_coords = coords[edges[:, 0], np.newaxis]
+    end_coords = coords[edges[:, 1], np.newaxis]
+    new_coords = (end_coords * steps + start_coords * (n_div - steps)) / n_div
+    new_coords = new_coords.reshape(-1, 3).astype(coords.dtype)
+    e_mapping = dict(zip(map(tuple, edges.tolist()), edge_points))
 
-            # connecting points on an edge and the opposite point
-            idx2, c2 = c, coords[c]
-            for idx1, c1 in zip(indices, cc):
-                if idx1 not in neighbors[idx2]:
-                    d = np.linalg.norm(c1 - c2)
-                    neighbors[idx2][idx1] = d
-                    neighbors[idx1][idx2] = d
+    # Collect each connection once; add its reverse when building the graph.
+    # Start with consecutive points along each edge, including both endpoints.
+    chain = np.concatenate([edges[:, :1], edge_points, edges[:, 1:]], axis=1)
+    row_blocks = [chain[:, :-1].ravel()]
+    col_blocks = [chain[:, 1:].ravel()]
+    segment_lengths = _row_norms(coords[edges[:, 1]] - coords[edges[:, 0]]) / n_div
+    distance_blocks = [np.repeat(segment_lengths, n_div)]
 
-        # connecting points on an edge and points on another edge
-        for i, j in [[0, 1], [1, 2], [2, 0]]:
-            cc1, indices1 = steiner[i]
-            cc2, indices2 = steiner[j]
-            for idx1, c1 in zip(indices1, cc1):
-                for idx2, c2 in zip(indices2, cc2):
-                    if idx1 not in neighbors[idx2]:
-                        d = np.linalg.norm(c1 - c2)
-                        neighbors[idx2][idx1] = d
-                        neighbors[idx1][idx2] = d
+    # Deduplicate faces so CSR construction does not sum repeated connections.
+    _, first_face = np.unique(np.sort(faces, axis=1), axis=0, return_index=True)
+    first_face = np.sort(first_face)
+    # Shape: (n_unique_faces, 3 edges, n_edge_points).
+    face_points = edge_points[face_edge_ids[first_face]]
+    all_coords = np.concatenate([coords, new_coords])
 
+    # Connect each edge's points to the face vertex opposite that edge.
+    opposite_vertices = faces[first_face][:, [2, 0, 1], np.newaxis]
+    row_blocks.append(face_points.ravel())
+    col_blocks.append(np.broadcast_to(opposite_vertices, face_points.shape).ravel())
+
+    # Connect every pair of points on different edges of the same face. The
+    # cyclic edge pairs (0, 1), (1, 2), (2, 0) cover each pair of edges once.
+    pair_shape = face_points.shape + (n_edge_points,)
+    row_blocks.append(np.broadcast_to(face_points[..., np.newaxis], pair_shape).ravel())
+    col_blocks.append(
+        np.broadcast_to(face_points[:, [1, 2, 0], np.newaxis], pair_shape).ravel()
+    )
+
+    # Segment lengths are already known; compute lengths for face connections.
+    for rows, cols in zip(row_blocks[1:], col_blocks[1:]):
+        distance_blocks.append(_connection_distances(all_coords, rows, cols))
+
+    rows = np.concatenate(row_blocks)
+    cols = np.concatenate(col_blocks)
+    distances = np.concatenate(distance_blocks)
+    # Release the blocks before allocating the symmetric graph entries.
+    del row_blocks, col_blocks, distance_blocks
+    n_vertices = all_coords.shape[0]
+    neighbors = sparse.csr_matrix(
+        (
+            np.concatenate([distances, distances]),
+            (np.concatenate([rows, cols]), np.concatenate([cols, rows])),
+        ),
+        shape=(n_vertices, n_vertices),
+    )
     return new_coords, e_mapping, neighbors
 
 
@@ -126,12 +171,44 @@ def neighbors_to_coo(neighbors):
     dists : ndarray of shape (n_edges,)
         The length of each edge.
     """
-    counts = np.fromiter((len(_) for _ in neighbors.values()), int, len(neighbors))
-    n = counts.sum()
+    counts = np.fromiter(
+        (len(adjacent) for adjacent in neighbors.values()), int, len(neighbors)
+    )
+    n_connections = counts.sum()
     rows = np.repeat(np.fromiter(neighbors.keys(), int, len(neighbors)), counts)
-    cols = np.fromiter((j for _ in neighbors.values() for j in _), int, n)
-    dists = np.fromiter((d for _ in neighbors.values() for d in _.values()), float, n)
+    cols = np.fromiter(
+        (vertex for adjacent in neighbors.values() for vertex in adjacent),
+        int,
+        n_connections,
+    )
+    dists = np.fromiter(
+        (distance for adjacent in neighbors.values() for distance in adjacent.values()),
+        float,
+        n_connections,
+    )
     return rows, cols, dists
+
+
+def neighbors_to_graph(neighbors, nv):
+    """Convert the neighbors of each vertex to a graph in CSR format.
+
+    Parameters
+    ----------
+    neighbors : scipy.sparse matrix or dict
+        The graph returned by ``subdivide_edges``, or the neighbors of each
+        vertex in the format of ``voronoi_legacy.subdivide_edges``.
+    nv : int
+        The number of vertices.
+
+    Returns
+    -------
+    graph : scipy.sparse.csr_matrix of shape (nv, nv)
+        Each stored entry is the distance between two neighboring vertices.
+    """
+    if sparse.issparse(neighbors):
+        return sparse.csr_matrix(neighbors)
+    rows, cols, dists = neighbors_to_coo(neighbors)
+    return sparse.csr_matrix((dists, (rows, cols)), shape=(nv, nv))
 
 
 def subdivision_voronoi(
@@ -163,11 +240,9 @@ def subdivision_voronoi(
         The mapping from the original edges to the new vertices. The keys are
         tuples of sorted vertex indices of the original edges. The values are
         the indices of the new vertices.
-    neighbors : dict
-        The neighbors of each vertex. The keys are the vertex indices. The
-        values are dictionaries. The keys of the dictionaries are the indices
-        of the neighboring vertices. The values of the dictionaries are the
-        distances between the vertex and the neighboring vertices.
+    neighbors : scipy.sparse.csr_matrix or dict
+        The graph returned by ``subdivide_edges``. The format of
+        ``voronoi_legacy.subdivide_edges`` is also accepted.
     f_indices : ndarray of shape (nv_target,)
         Each element is the index of the triangle face on the original mesh
         that contains the corresponding vertex on the target mesh.
@@ -191,27 +266,38 @@ def subdivision_voronoi(
         mesh and the nearest vertex on the target mesh.
     """
     nv, nt = coords.shape[0], len(f_indices)
-    n1 = len(np.unique(f_indices))
-    if n1 != nt:
-        warnings.warn(f"{nt} template vertices are mapped to {n1} faces.")
+    n_target_faces = len(np.unique(f_indices))
+    if n_target_faces != nt:
+        warnings.warn(f"{nt} template vertices are mapped to {n_target_faces} faces.")
 
-    # Each vertex of the target mesh is added to the graph as a new node,
-    # which is connected to the vertices on the edges of its face.
-    rows, cols, dists = neighbors_to_coo(neighbors)
-    rows, cols, dists = [rows], [cols], [dists]
-    for i, (f_idx, w) in enumerate(zip(f_indices, weights)):
-        cc = w @ coords[faces[f_idx]]
+    # Each target vertex becomes a source node with outgoing connections to
+    # the original and subdivided vertices on its face's boundary.
+    target_cols, target_distances = [], []
+    for f_idx, face_weights in zip(f_indices, weights):
+        target_coord = face_weights @ coords[faces[f_idx]]
         a, b, c = sorted(faces[f_idx])
-        indices = np.concatenate(
+        boundary_indices = np.concatenate(
             [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
         )
-        rows.append(np.full(indices.shape, nv + i))
-        cols.append(indices)
-        dists.append(cdist(cc[np.newaxis], coords[indices], "euclidean").ravel())
-    graph = sparse.csr_matrix(
-        (np.concatenate(dists), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(nv + nt, nv + nt),
+        target_cols.append(boundary_indices)
+        target_distances.append(
+            cdist(target_coord[np.newaxis], coords[boundary_indices], "euclidean").ravel()
+        )
+    target_indptr = np.concatenate([[0], np.cumsum([len(cols) for cols in target_cols])])
+
+    # Widen the mesh graph with empty columns for the target nodes, then append
+    # one row per target. Connections point out of targets only, so paths
+    # cannot use a target node as a shortcut through a face.
+    mesh_graph = neighbors_to_graph(neighbors, nv)
+    mesh_rows = sparse.csr_matrix(
+        (mesh_graph.data, mesh_graph.indices, mesh_graph.indptr), shape=(nv, nv + nt)
     )
+    target_rows = sparse.csr_matrix(
+        (np.concatenate(target_distances), np.concatenate(target_cols), target_indptr),
+        shape=(nt, nv + nt),
+    )
+    graph = sparse.vstack([mesh_rows, target_rows], format="csr")
+    del mesh_graph, mesh_rows, target_rows
 
     dists, _, sources = dijkstra(
         graph,
@@ -241,11 +327,9 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         The mapping from the original edges to the new vertices. The keys are
         tuples of sorted vertex indices of the original edges. The values are
         the indices of the new vertices.
-    neighbors : dict
-        The neighbors of each vertex. The keys are the vertex indices. The
-        values are dictionaries. The keys of the dictionaries are the indices
-        of the neighboring vertices. The values of the dictionaries are the
-        distances between the vertex and the neighboring vertices.
+    neighbors : scipy.sparse.csr_matrix or dict
+        The graph returned by ``subdivide_edges``. The format of
+        ``voronoi_legacy.subdivide_edges`` is also accepted.
     verbose : bool, default=False
         Retained for backward compatibility and ignored. The multi-source
         search does not report per-source progress.
@@ -260,8 +344,7 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         mesh and the nearest vertex on the original mesh.
     """
     nv = coords.shape[0]
-    rows, cols, dists = neighbors_to_coo(neighbors)
-    graph = sparse.csr_matrix((dists, (rows, cols)), shape=(nv, nv))
+    graph = neighbors_to_graph(neighbors, nv)
     nnd, _, nn = dijkstra(
         graph,
         indices=np.unique(faces),
