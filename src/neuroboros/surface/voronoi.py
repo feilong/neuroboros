@@ -1,3 +1,4 @@
+import functools
 import warnings
 from dataclasses import dataclass
 
@@ -7,9 +8,7 @@ from scipy.sparse.csgraph import dijkstra
 from scipy.spatial.distance import cdist
 
 from .properties import compute_face_areas
-
-# Preserve the original import path for callers of the legacy helper.
-from .voronoi_legacy import dijkstra_distances as dijkstra_distances
+from .voronoi_legacy import dijkstra_distances as _legacy_dijkstra_distances
 
 
 def _row_norms(x):
@@ -135,7 +134,7 @@ def _subdivided_graph(coords, faces, n_div):
     return edges, face_edge_ids, edge_points, new_coords, neighbors
 
 
-def subdivide_edges(coords, faces, n_div):
+def _subdivide_edges(coords, faces, n_div):
     """Subdivide each edge into ``n_div`` parts.
 
     This function adds new vertices to the mesh. The new vertices are placed
@@ -178,7 +177,7 @@ def subdivide_edges(coords, faces, n_div):
     return new_coords, e_mapping, neighbors
 
 
-def neighbors_to_coo(neighbors):
+def _neighbors_to_coo(neighbors):
     """Convert the neighbors of each vertex to a graph in COO format.
 
     Parameters
@@ -216,7 +215,7 @@ def neighbors_to_coo(neighbors):
     return rows, cols, dists
 
 
-def neighbors_to_graph(neighbors, nv):
+def _neighbors_to_graph(neighbors, nv):
     """Convert the neighbors of each vertex to a graph in CSR format.
 
     Parameters
@@ -234,11 +233,11 @@ def neighbors_to_graph(neighbors, nv):
     """
     if sparse.issparse(neighbors):
         return sparse.csr_matrix(neighbors)
-    rows, cols, dists = neighbors_to_coo(neighbors)
+    rows, cols, dists = _neighbors_to_coo(neighbors)
     return sparse.csr_matrix((dists, (rows, cols)), shape=(nv, nv))
 
 
-def subdivision_voronoi(
+def _subdivision_voronoi(
     coords,
     faces,
     e_mapping,
@@ -315,7 +314,7 @@ def subdivision_voronoi(
     # Widen the mesh graph with empty columns for the target nodes, then append
     # one row per target. Connections point out of targets only, so paths
     # cannot use a target node as a shortcut through a face.
-    mesh_graph = neighbors_to_graph(neighbors, nv)
+    mesh_graph = _neighbors_to_graph(neighbors, nv)
     mesh_rows = sparse.csr_matrix(
         (mesh_graph.data, mesh_graph.indices, mesh_graph.indptr), shape=(nv, nv + nt)
     )
@@ -337,7 +336,7 @@ def subdivision_voronoi(
     return nn, nnd
 
 
-def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
+def _native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
     """Voronoi diagram on the original mesh.
 
     This function estimates the nearest vertex on the original mesh for each
@@ -371,7 +370,7 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
         mesh and the nearest vertex on the original mesh.
     """
     nv = coords.shape[0]
-    graph = neighbors_to_graph(neighbors, nv)
+    graph = _neighbors_to_graph(neighbors, nv)
     nnd, _, nn = dijkstra(
         graph,
         indices=np.unique(faces),
@@ -383,7 +382,7 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
     return nn, nnd
 
 
-def inverse_face_mapping(f_indices, weights, coords, faces):
+def _inverse_face_mapping(f_indices, weights, coords, faces):
     """Inverse face mapping.
 
     This function computes the mapping from the original faces to the target
@@ -420,7 +419,7 @@ def inverse_face_mapping(f_indices, weights, coords, faces):
     return f_inv
 
 
-def split_triangle(t_div):
+def _split_triangle(t_div):
     """Return barycentric coordinates of the ``t_div**2`` subtriangle centroids."""
     ww1 = []
     for i in range(t_div):
@@ -440,7 +439,7 @@ def split_triangle(t_div):
     return ww
 
 
-def compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww):
+def _compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww):
     """
     Parameters
     ----------
@@ -496,7 +495,7 @@ def compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww):
     return {u: occupation == u for u in np.unique(occupation)}
 
 
-def compute_overlap(
+def _compute_overlap(
     faces,
     face_areas,
     e_mapping,
@@ -512,14 +511,14 @@ def compute_overlap(
     t_div=32,
 ):
     mat = sparse.lil_matrix((nv1, nv2))
-    ww = split_triangle(t_div)
+    ww = _split_triangle(t_div)
     for f_idx, f in enumerate(faces):
         a, b, c = sorted(faces[f_idx])
         indices = np.concatenate(
             [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
         )
-        uu1 = compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww)
-        uu2 = compute_occupation(f_idx, f, coords, indices, nn2, nnd2, f_inv2, ww)
+        uu1 = _compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww)
+        uu2 = _compute_occupation(f_idx, f, coords, indices, nn2, nnd2, f_inv2, ww)
         for u1, m1 in uu1.items():
             for u2, m2 in uu2.items():
                 overlap = np.logical_and(m1, m2).mean()
@@ -528,7 +527,7 @@ def compute_overlap(
     return mat.tocsr()
 
 
-def overlap_transform(
+def _overlap_transform(
     anat,
     sphere,
     tpl_coords,
@@ -540,11 +539,11 @@ def overlap_transform(
     t_div=32,
 ):
     f_indices, weights = sphere.barycentric(tpl_coords, eps=1e-7, return_sparse=False)
-    nn, nnd = subdivision_voronoi(
+    nn, nnd = _subdivision_voronoi(
         coords, anat.faces, e_mapping, neighbors, f_indices, weights
     )
-    f_inv = inverse_face_mapping(f_indices, weights, anat.coords, anat.faces)
-    mat = compute_overlap(
+    f_inv = _inverse_face_mapping(f_indices, weights, anat.coords, anat.faces)
+    mat = _compute_overlap(
         anat.faces,
         anat.face_areas,
         e_mapping,
@@ -625,7 +624,7 @@ class VoronoiOverlap:
         self.t_div = int(t_div)
         self.cache_samples = bool(cache_samples)
         self.face_areas = compute_face_areas(coords, faces)
-        self._ww = split_triangle(self.t_div)  # Barycentric sample coordinates.
+        self._ww = _split_triangle(self.t_div)  # Barycentric sample coordinates.
 
         _, face_edge_ids, edge_points, new_coords, graph = _subdivided_graph(
             coords, faces, self.n_div
@@ -1137,3 +1136,42 @@ def _face_nodes(faces, face_edge_ids, edge_points):
 """
 Similar to https://github.com/mojocorp/geodesic subdivision
 """
+
+
+def _deprecated(func, name, alternative="VoronoiOverlap"):
+    """Wrap ``func`` so that calling it by its former public ``name`` warns."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        warnings.warn(
+            f"neuroboros.surface.voronoi.{name} is deprecated and will be "
+            f"removed in a future version; use {alternative} instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return func(*args, **kwargs)
+
+    # Bound in this module, so that pickle finds it here.
+    wrapper.__module__ = __name__
+    wrapper.__name__ = wrapper.__qualname__ = name
+    return wrapper
+
+
+# The former public functions, unchanged in behaviour. Calls within this
+# module use the private functions, so each public call warns only once.
+subdivide_edges = _deprecated(_subdivide_edges, "subdivide_edges")
+neighbors_to_coo = _deprecated(_neighbors_to_coo, "neighbors_to_coo")
+neighbors_to_graph = _deprecated(_neighbors_to_graph, "neighbors_to_graph")
+subdivision_voronoi = _deprecated(_subdivision_voronoi, "subdivision_voronoi")
+native_voronoi = _deprecated(_native_voronoi, "native_voronoi")
+inverse_face_mapping = _deprecated(_inverse_face_mapping, "inverse_face_mapping")
+split_triangle = _deprecated(_split_triangle, "split_triangle")
+compute_occupation = _deprecated(_compute_occupation, "compute_occupation")
+compute_overlap = _deprecated(_compute_overlap, "compute_overlap")
+overlap_transform = _deprecated(_overlap_transform, "overlap_transform")
+# Formerly re-exported here; the function stays in voronoi_legacy.
+dijkstra_distances = _deprecated(
+    _legacy_dijkstra_distances,
+    "dijkstra_distances",
+    "neuroboros.surface.voronoi_legacy.dijkstra_distances",
+)

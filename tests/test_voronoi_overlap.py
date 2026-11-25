@@ -7,6 +7,11 @@ from scipy.spatial import ConvexHull
 from neuroboros.surface import Sphere, Surface, voronoi
 from neuroboros.surface.voronoi import VoronoiOverlap
 
+# The deprecated functions keep their behaviour and serve as the reference.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:neuroboros.surface.voronoi:DeprecationWarning"
+)
+
 
 @pytest.fixture
 def mesh():

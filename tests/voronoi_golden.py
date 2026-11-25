@@ -246,6 +246,7 @@ def load():
 
 
 def main():
+    warnings.filterwarnings("ignore", "neuroboros.surface.voronoi", DeprecationWarning)
     source = subprocess.run(
         ["git", "describe", "--always", "--dirty"],
         capture_output=True,

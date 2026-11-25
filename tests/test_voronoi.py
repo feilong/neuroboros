@@ -1,7 +1,15 @@
+import pickle
+import warnings
+
 import numpy as np
 import pytest
 
-from neuroboros.surface import voronoi, voronoi_legacy
+from neuroboros.surface import Sphere, Surface, voronoi, voronoi_legacy
+
+# The deprecated functions keep their behaviour and are tested here.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:neuroboros.surface.voronoi:DeprecationWarning"
+)
 
 
 @pytest.fixture
@@ -48,11 +56,7 @@ def test_native_voronoi_legacy_arguments(subdivided_mesh, positional, verbose):
 
 def test_dijkstra_distances_original_import_path():
     from neuroboros.surface.voronoi import dijkstra_distances
-    from neuroboros.surface.voronoi_legacy import (
-        dijkstra_distances as legacy_dijkstra_distances,
-    )
 
-    assert dijkstra_distances is legacy_dijkstra_distances
     neighbors = {0: {1: 1.0}, 1: {0: 1.0, 2: 2.0}, 2: {1: 2.0}}
     np.testing.assert_array_equal(
         dijkstra_distances(3, [(0.0, 0)], neighbors), [0.0, 1.0, 3.0]
@@ -122,3 +126,75 @@ def test_subdivided_graph_arrays(n_div):
         np.testing.assert_array_equal(indices, expected[1][tuple(e)])
     pairs = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]], axis=2)
     np.testing.assert_array_equal(edges[face_edge_ids], pairs)
+
+
+DEPRECATED = [
+    "subdivide_edges",
+    "neighbors_to_coo",
+    "neighbors_to_graph",
+    "subdivision_voronoi",
+    "native_voronoi",
+    "inverse_face_mapping",
+    "split_triangle",
+    "compute_occupation",
+    "compute_overlap",
+    "overlap_transform",
+    "dijkstra_distances",
+]
+
+
+@pytest.fixture
+def deprecated_calls():
+    """A call of each deprecated function on a tetrahedron."""
+    sphere = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]) / np.sqrt(3)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    new_coords, e_mapping, graph = voronoi._subdivide_edges(sphere, faces, 2)
+    coords = np.concatenate([sphere, new_coords])
+    nn, nnd = voronoi._native_voronoi(coords, faces, e_mapping, graph)
+    legacy_graph = voronoi_legacy.subdivide_edges(sphere, faces, 2)[2]
+    point = sphere[:3].mean(axis=0, keepdims=True)
+    f_indices, weights = np.array([0]), np.full((1, 3), 1 / 3)
+    surf = Surface(sphere, faces)
+    edge_nodes = [e_mapping[(0, 1)], e_mapping[(0, 2)], e_mapping[(1, 2)]]
+    indices = np.concatenate(edge_nodes + [[0, 1, 2]])
+    ww = voronoi._split_triangle(2)
+    native = (nn, nnd, {})
+    return {
+        "subdivide_edges": lambda f: f(sphere, faces, 2),
+        "neighbors_to_coo": lambda f: f(legacy_graph),
+        "neighbors_to_graph": lambda f: f(legacy_graph, len(coords)),
+        "subdivision_voronoi": lambda f: f(
+            coords, faces, e_mapping, graph, f_indices, weights
+        ),
+        "native_voronoi": lambda f: f(coords, faces, e_mapping, graph),
+        "inverse_face_mapping": lambda f: f(f_indices, weights, sphere, faces),
+        "split_triangle": lambda f: f(2),
+        "compute_occupation": lambda f: f(0, faces[0], coords, indices, *native, ww),
+        "compute_overlap": lambda f: f(
+            faces, surf.face_areas, e_mapping, coords, *native, *native, 4, 4, t_div=2
+        ),
+        "overlap_transform": lambda f: f(
+            surf, Sphere(sphere, faces), point, coords, e_mapping, graph, nn, nnd, 2
+        ),
+        "dijkstra_distances": lambda f: f(2, [(0.0, 0)], {0: {1: 1.0}, 1: {0: 1.0}}),
+    }
+
+
+@pytest.mark.parametrize("name", DEPRECATED)
+def test_deprecation_warning(deprecated_calls, name):
+    func = getattr(voronoi, name)
+    assert func.__name__ == name
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        deprecated_calls[name](func)
+    # One warning, attributed to the caller: internal calls do not warn.
+    assert [r.category for r in records] == [DeprecationWarning]
+    message = str(records[0].message)
+    assert message.startswith(f"neuroboros.surface.voronoi.{name} is deprecated")
+    assert records[0].filename == __file__
+
+
+@pytest.mark.parametrize("name", DEPRECATED)
+def test_deprecated_pickle(name):
+    func = getattr(voronoi, name)
+    assert pickle.loads(pickle.dumps(func)) is func
