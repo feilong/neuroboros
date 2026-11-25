@@ -4,6 +4,7 @@ from datetime import datetime
 
 import numpy as np
 import scipy.sparse as sparse
+from scipy.sparse.csgraph import dijkstra
 from scipy.spatial.distance import cdist
 
 
@@ -104,6 +105,34 @@ def subdivide_edges(coords, faces, n_div):
     return new_coords, e_mapping, neighbors
 
 
+def neighbors_to_coo(neighbors):
+    """Convert the neighbors of each vertex to a graph in COO format.
+
+    Parameters
+    ----------
+    neighbors : dict
+        The neighbors of each vertex. The keys are the vertex indices. The
+        values are dictionaries. The keys of the dictionaries are the indices
+        of the neighboring vertices. The values of the dictionaries are the
+        distances between the vertex and the neighboring vertices.
+
+    Returns
+    -------
+    rows : ndarray of shape (n_edges,)
+        The index of the first vertex of each edge.
+    cols : ndarray of shape (n_edges,)
+        The index of the second vertex of each edge.
+    dists : ndarray of shape (n_edges,)
+        The length of each edge.
+    """
+    counts = np.fromiter((len(_) for _ in neighbors.values()), int, len(neighbors))
+    n = counts.sum()
+    rows = np.repeat(np.fromiter(neighbors.keys(), int, len(neighbors)), counts)
+    cols = np.fromiter((j for _ in neighbors.values() for j in _), int, n)
+    dists = np.fromiter((d for _ in neighbors.values() for d in _.values()), float, n)
+    return rows, cols, dists
+
+
 def dijkstra_distances(nv, candidates, neighbors, max_dist=None):
     """Dijkstra's algorithm to estimate the geodesic distances.
 
@@ -199,11 +228,11 @@ def subdivision_voronoi(
         Each row is the barycentric weights of the three vertices of the face
         for the corresponding vertex on the target mesh.
     max_dist : float or None, default=None
-        The maximum distance of the initial search. If None, the maximum
-        distance is computed based on the number of vertices on the target
-        mesh.
+        Retained for backward compatibility and ignored. The multi-source
+        search computes distances without an initial search radius.
     verbose : bool, default=False
-        Whether to print the progress or not.
+        Retained for backward compatibility and ignored. The multi-source
+        search does not report per-source progress.
 
     Returns
     -------
@@ -214,43 +243,37 @@ def subdivision_voronoi(
         The estimated geodesic distances between each vertex of the subdivided
         mesh and the nearest vertex on the target mesh.
     """
-    nv = coords.shape[0]
-    n1, n2 = len(np.unique(f_indices)), len(f_indices)
-    if n1 != n2:
-        warnings.warn(f"{n2} template vertices are mapped to {n1} faces.")
-    if max_dist is None:
-        max_dist = 4.0 * np.sqrt(10242 / f_indices.shape[0]) + 2.0
-    log_step = f_indices.shape[0] // 100 + 1
-    nn = np.full((nv,), -1, dtype=int)
-    nnd = np.full((nv,), np.inf)
-    while np.any(np.isinf(nnd)):
-        for i, (f_idx, w) in enumerate(zip(f_indices, weights)):
-            cc = w @ coords[faces[f_idx]]
-            a, b, c = sorted(faces[f_idx])
-            indices = np.concatenate(
-                [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
-            )
-            dd = cdist(cc[np.newaxis], coords[indices], "euclidean").ravel()
-            candidates = []
-            for d, idx in zip(dd, indices):
-                heapq.heappush(candidates, (d, idx))
-            d = dijkstra_distances(nv, candidates, neighbors, max_dist=max_dist)
-            mask = d < nnd
-            nn[mask] = i
-            nnd[mask] = d[mask]
-            if verbose and i % log_step == 0:
-                print(
-                    datetime.now(),
-                    i,
-                    mask.sum(),
-                    np.isfinite(d).sum(),
-                    d.shape,
-                    d.max(),
-                    d.min(),
-                    len(candidates),
-                    np.isinf(nnd).sum(),
-                )
-        max_dist *= 1.5
+    nv, nt = coords.shape[0], len(f_indices)
+    n1 = len(np.unique(f_indices))
+    if n1 != nt:
+        warnings.warn(f"{nt} template vertices are mapped to {n1} faces.")
+
+    # Each vertex of the target mesh is added to the graph as a new node,
+    # which is connected to the vertices on the edges of its face.
+    rows, cols, dists = neighbors_to_coo(neighbors)
+    rows, cols, dists = [rows], [cols], [dists]
+    for i, (f_idx, w) in enumerate(zip(f_indices, weights)):
+        cc = w @ coords[faces[f_idx]]
+        a, b, c = sorted(faces[f_idx])
+        indices = np.concatenate(
+            [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
+        )
+        rows.append(np.full(indices.shape, nv + i))
+        cols.append(indices)
+        dists.append(cdist(cc[np.newaxis], coords[indices], "euclidean").ravel())
+    graph = sparse.csr_matrix(
+        (np.concatenate(dists), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(nv + nt, nv + nt),
+    )
+
+    dists, _, sources = dijkstra(
+        graph,
+        indices=np.arange(nv, nv + nt),
+        return_predecessors=True,
+        min_only=True,
+    )
+    nn = np.where(sources[:nv] >= 0, sources[:nv] - nv, -1)
+    nnd = dists[:nv]
     return nn, nnd
 
 

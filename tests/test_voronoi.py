@@ -1,0 +1,34 @@
+import numpy as np
+import pytest
+
+from neuroboros.surface import voronoi
+
+
+@pytest.fixture
+def subdivided_mesh():
+    coords = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    new_coords, mapping, neighbors = voronoi.subdivide_edges(coords, faces, 3)
+    return np.concatenate([coords, new_coords]), faces, mapping, neighbors
+
+
+@pytest.mark.parametrize("positional", [False, True])
+@pytest.mark.parametrize("max_dist", [None, 0.01])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_subdivision_voronoi_legacy_arguments(
+    subdivided_mesh, positional, max_dist, verbose
+):
+    args = (*subdivided_mesh, np.array([0]), np.array([[0.2, 0.3, 0.5]]))
+    expected_nn, expected_nnd = voronoi.subdivision_voronoi(*args)
+    if positional:
+        nn, nnd = voronoi.subdivision_voronoi(*args, max_dist, verbose)
+    else:
+        nn, nnd = voronoi.subdivision_voronoi(
+            *args, max_dist=max_dist, verbose=verbose
+        )
+    np.testing.assert_array_equal(nn, expected_nn)
+    np.testing.assert_allclose(nnd, expected_nnd)
+    assert np.all(nn == 0)
+    assert np.all(np.isfinite(nnd))
