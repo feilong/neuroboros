@@ -119,14 +119,14 @@ def test_native_labels(mesh, n_div):
     coords, faces, _ = mesh
     ov = VoronoiOverlap(coords, faces, n_div=n_div)
     assert ov._native is None
-    labels = ov._get("native")
+    point_set = ov._get("native")
     nn, nnd = voronoi.native_voronoi(*_old_inputs(ov))
-    assert labels.nn.dtype == np.int32
-    np.testing.assert_array_equal(labels.nn, nn)
-    np.testing.assert_array_equal(labels.nnd, nnd)
-    assert labels.size == len(coords)
-    np.testing.assert_array_equal(labels.inside_ptr, np.zeros(len(faces) + 1))
-    assert labels.inside_labels.size == 0
+    assert point_set.nn.dtype == np.int32
+    np.testing.assert_array_equal(point_set.nn, nn)
+    np.testing.assert_array_equal(point_set.nnd, nnd)
+    assert point_set.size == len(coords)
+    np.testing.assert_array_equal(point_set.inside_ptr, np.zeros(len(faces) + 1))
+    assert point_set.inside_labels.size == 0
 
 
 @pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
@@ -135,29 +135,29 @@ def test_add_labels(mesh, points, n_div):
     coords, faces, sphere = mesh
     ov = VoronoiOverlap(coords, faces, sphere, n_div=n_div)
     ov.add("points", points)
-    labels = ov._get("points")
+    point_set = ov._get("points")
     f_indices, weights = Sphere(sphere, faces).barycentric(
         points, eps=1e-7, return_sparse=False
     )
     assert len(np.unique(f_indices)) < len(points)
     nn, nnd = voronoi.subdivision_voronoi(*_old_inputs(ov), f_indices, weights)
-    assert labels.nn.dtype == np.int32
-    np.testing.assert_array_equal(labels.nn, nn)
-    np.testing.assert_array_equal(labels.nnd, nnd)
-    assert labels.size == len(points)
+    assert point_set.nn.dtype == np.int32
+    np.testing.assert_array_equal(point_set.nn, nn)
+    np.testing.assert_array_equal(point_set.nnd, nnd)
+    assert point_set.size == len(points)
 
     f_inv = voronoi.inverse_face_mapping(f_indices, weights, ov.coords, faces)
     for f in range(len(faces)):
-        inside = slice(labels.inside_ptr[f], labels.inside_ptr[f + 1])
+        inside = slice(point_set.inside_ptr[f], point_set.inside_ptr[f + 1])
         expected = f_inv.get(f, [])
-        assert labels.inside_labels[inside].tolist() == [i for i, _ in expected]
+        assert point_set.inside_labels[inside].tolist() == [i for i, _ in expected]
         np.testing.assert_array_equal(
-            labels.inside_coords[inside],
+            point_set.inside_coords[inside],
             np.reshape([c for _, c in expected], (-1, 3)),
         )
 
     ov.add("weights", f_indices=f_indices, weights=weights)
-    for key, value in vars(labels).items():
+    for key, value in vars(point_set).items():
         np.testing.assert_array_equal(getattr(ov._get("weights"), key), value)
     assert ov.names == ("native", "points", "weights")
 
@@ -253,7 +253,7 @@ def test_discard(mesh):
 
 def _expected_samples(ov, name, f_indices=None, weights=None):
     """The sample labels of every face from compute_occupation."""
-    labels = ov._get(name)
+    point_set = ov._get(name)
     _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
     f_inv = {}
     if f_indices is not None:
@@ -265,17 +265,24 @@ def _expected_samples(ov, name, f_indices=None, weights=None):
             [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
         )
         occupation = voronoi.compute_occupation(
-            f_idx, f, ov._node_coords, indices, labels.nn, labels.nnd, f_inv, ov._ww
+            f_idx,
+            f,
+            ov._node_coords,
+            indices,
+            point_set.nn,
+            point_set.nnd,
+            f_inv,
+            ov._ww,
         )
         for u, mask in occupation.items():
             expected[f_idx, mask] = u
     return expected
 
 
-def _decoded_samples(ov, name, samples):
-    decoded = np.repeat(samples.single[:, np.newaxis], len(ov._ww), axis=1)
-    decoded[samples.mixed_faces] = ov._decode(
-        ov._get(name), samples.mixed_faces, samples.local
+def _decoded_samples(ov, name, sample_labels):
+    decoded = np.repeat(sample_labels.single[:, np.newaxis], len(ov._ww), axis=1)
+    decoded[sample_labels.mixed_faces] = ov._decode(
+        ov._get(name), sample_labels.mixed_faces, sample_labels.local
     )
     return decoded
 
@@ -295,15 +302,15 @@ def test_sample_labels(mesh, n_div, t_div, n_points):
         placement = dict(f_indices=f_indices, weights=weights)
         name = "points"
         ov.add(name, **placement)
-    samples = ov._sample_labels(ov._get(name))
+    sample_labels = ov._sample_labels(ov._get(name))
     expected = _expected_samples(ov, name, **placement)
 
-    np.testing.assert_array_equal(_decoded_samples(ov, name, samples), expected)
-    is_single = samples.single >= 0
-    np.testing.assert_array_equal(np.flatnonzero(~is_single), samples.mixed_faces)
+    np.testing.assert_array_equal(_decoded_samples(ov, name, sample_labels), expected)
+    is_single = sample_labels.single >= 0
+    np.testing.assert_array_equal(np.flatnonzero(~is_single), sample_labels.mixed_faces)
     assert not np.any(is_single & (np.diff(ov._get(name).inside_ptr) > 0))
-    assert samples.local.shape == (len(samples.mixed_faces), t_div**2)
-    assert samples.local.dtype == np.uint8
+    assert sample_labels.local.shape == (len(sample_labels.mixed_faces), t_div**2)
+    assert sample_labels.local.dtype == np.uint8
     if n_points == 5:
         assert 0 < is_single.sum() < len(faces)
 
@@ -335,9 +342,11 @@ def test_sample_labels_ties(n_div, t_div):
         ("native", {}),
         ("points", dict(f_indices=f_indices, weights=weights)),
     ]:
-        samples = ov._sample_labels(ov._get(name))
+        sample_labels = ov._sample_labels(ov._get(name))
         expected = _expected_samples(ov, name, **placement)
-        np.testing.assert_array_equal(_decoded_samples(ov, name, samples), expected)
+        np.testing.assert_array_equal(
+            _decoded_samples(ov, name, sample_labels), expected
+        )
 
 
 @pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
@@ -347,9 +356,9 @@ def test_sample_labels_chunk_size(mesh, points, chunk_size):
     ov.add("points", points)
     for name in ov.names:
         expected = ov._sample_labels(ov._get(name))
-        samples = ov._sample_labels(ov._get(name), chunk_size=chunk_size)
+        sample_labels = ov._sample_labels(ov._get(name), chunk_size=chunk_size)
         for key, value in vars(expected).items():
-            np.testing.assert_array_equal(getattr(samples, key), value)
+            np.testing.assert_array_equal(getattr(sample_labels, key), value)
 
 
 @pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
@@ -362,10 +371,12 @@ def test_sample_labels_dtype(mesh, n_inside, dtype):
     f_indices = np.concatenate([np.full(n_inside, 3), others])
     weights = rng.dirichlet(np.ones(3), len(f_indices))
     ov.add("points", f_indices=f_indices, weights=weights)
-    samples = ov._sample_labels(ov._get("points"))
-    assert samples.local.dtype == dtype
+    sample_labels = ov._sample_labels(ov._get("points"))
+    assert sample_labels.local.dtype == dtype
     expected = _expected_samples(ov, "points", f_indices, weights)
-    np.testing.assert_array_equal(_decoded_samples(ov, "points", samples), expected)
+    np.testing.assert_array_equal(
+        _decoded_samples(ov, "points", sample_labels), expected
+    )
 
 
 def test_sample_labels_limit(mesh):
@@ -413,11 +424,11 @@ def _reference(ov, placements, source, target):
     _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
     args = []
     for name in (source, target):
-        labels = ov._get(name)
+        point_set = ov._get(name)
         f_inv = {}
         if name != "native":
             f_inv = voronoi.inverse_face_mapping(*placements[name], ov.coords, ov.faces)
-        args.append((labels.nn, labels.nnd, f_inv))
+        args.append((point_set.nn, point_set.nnd, f_inv))
     return voronoi.compute_overlap(
         ov.faces,
         ov.face_areas,
@@ -525,10 +536,10 @@ def test_transform_unreachable_faces(mesh):
 def test_discard_releases_samples(mesh):
     ov, _ = _with_point_sets(mesh)
     ov.transform("native", "many")
-    assert set(ov._samples) == {"native", "many"}
+    assert set(ov._sample_labels_cache) == {"native", "many"}
     ov.discard("many")
     ov.discard("native")
-    assert ov._samples == {}
+    assert ov._sample_labels_cache == {}
     with pytest.raises(KeyError):
         ov.transform("native", "many")
     _assert_identical(ov.transform("native", "few"), ov.transform("few", "native").T)
