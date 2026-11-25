@@ -19,6 +19,7 @@ from .properties import (
 from .subdivision import surface_subdivision
 from .union import compute_union_sphere
 from .voronoi import (
+    VoronoiOverlap,
     compute_occupation,
     native_voronoi,
     overlap_transform,
@@ -63,24 +64,15 @@ class Surface:
         return self._vertex_areas
 
     def vertex_areas_nn(self, n_div=8, t_div=32):
-        new_coords, e_mapping, neighbors = subdivide_edges(
-            self.coords, self.faces, n_div
-        )
-        coords = np.concatenate([self.coords, new_coords])
-        nn, nnd = native_voronoi(coords, self.faces, e_mapping, neighbors)
+        """The area of the geodesic Voronoi cell of each vertex.
 
-        areas = np.zeros((self.nv,))
-        face_areas = self.face_areas
-        ww = split_triangle(t_div)
-        for f_idx, f in enumerate(self.faces):
-            a, b, c = sorted(f)
-            indices = np.concatenate(
-                [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
-            )
-            uu = compute_occupation(f_idx, f, coords, indices, nn, nnd, {}, ww)
-            for u, m1 in uu.items():
-                areas[u] += m1.mean() * face_areas[f_idx]
-        return areas
+        See ``VoronoiOverlap.areas``. Sample labels are not cached, because
+        they are used only once.
+        """
+        ov = VoronoiOverlap(
+            self.coords, self.faces, n_div=n_div, t_div=t_div, cache_samples=False
+        )
+        return ov.areas("native")
 
     @property
     def face_areas(self):

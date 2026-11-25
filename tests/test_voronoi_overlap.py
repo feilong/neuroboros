@@ -480,17 +480,27 @@ def test_transform_matches_compute_overlap(mesh, n_div, t_div, cache_samples):
 @pytest.mark.parametrize("n_div", [1, 8])
 @pytest.mark.parametrize("t_div", [1, 2, 3, 8])
 def test_areas(mesh, n_div, t_div, cache_samples):
-    coords, faces, _ = mesh
     ov, placements = _with_point_sets(mesh, n_div, t_div, cache_samples=cache_samples)
-    expected = Surface(coords, faces).vertex_areas_nn(n_div=n_div, t_div=t_div)
-    np.testing.assert_array_equal(ov.areas("native"), expected)
-    for name in ["few", "many"]:
+    for name in ["native", "few", "many"]:
         expected = np.zeros(ov._get(name).size)
-        occupation = _expected_samples(ov, name, *placements[name])
+        occupation = _expected_samples(ov, name, *placements.get(name, ()))
         for f_idx, labels in enumerate(occupation):
             for u in np.unique(labels):
                 expected[u] += (labels == u).mean() * ov.face_areas[f_idx]
         np.testing.assert_array_equal(ov.areas(name), expected)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("n_div, t_div", [(8, 32), (1, 1), (2, 3)])
+def test_vertex_areas_nn(mesh, dtype, n_div, t_div):
+    coords, faces, _ = mesh
+    surf = Surface(coords.astype(dtype), faces)
+    ov = VoronoiOverlap(coords.astype(dtype), faces, n_div=n_div, t_div=t_div)
+    areas = surf.vertex_areas_nn(n_div=n_div, t_div=t_div)
+    np.testing.assert_array_equal(areas, ov.areas("native"))
+    np.testing.assert_allclose(areas.sum(), surf.face_areas.sum())
+    if (n_div, t_div) == (8, 32):
+        np.testing.assert_array_equal(surf.vertex_areas_nn(), areas)
 
 
 @pytest.mark.parametrize("cache_samples", [True, False])

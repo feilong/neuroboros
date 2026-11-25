@@ -25,9 +25,11 @@ import neuroboros as nb
 from neuroboros.surface import Sphere, Surface
 from neuroboros.surface.voronoi import (
     VoronoiOverlap,
+    compute_occupation,
     compute_overlap,
     inverse_face_mapping,
     native_voronoi,
+    split_triangle,
     subdivide_edges,
     subdivision_voronoi,
 )
@@ -161,11 +163,27 @@ def _labels(native, n_div, name):
     return nn, nnd, f_inv, points.shape[0]
 
 
+def _vertex_areas(native, n_div=8, t_div=32):
+    """``Surface.vertex_areas_nn`` as implemented with the functions."""
+    surf, coords, e_mapping, graph = _prepare(native, n_div)
+    nn, nnd = native_voronoi(coords, surf.faces, e_mapping, graph)
+    areas = np.zeros((surf.nv,))
+    ww = split_triangle(t_div)
+    for f_idx, f in enumerate(surf.faces):
+        a, b, c = sorted(f)
+        indices = np.concatenate(
+            [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
+        )
+        uu = compute_occupation(f_idx, f, coords, indices, nn, nnd, {}, ww)
+        for u, m1 in uu.items():
+            areas[u] += m1.mean() * surf.face_areas[f_idx]
+    return areas
+
+
 def compute(case):
-    """Compute a case with the current implementation."""
+    """Compute a case with the functions."""
     if case["kind"] == "areas":
-        coords, faces = nb.geometry("midthickness", LR, case["native"])
-        return Surface(coords, faces).vertex_areas_nn()
+        return _vertex_areas(case["native"])
     native, n_div = case["native"], case["n_div"]
     surf, coords, e_mapping, _ = _prepare(native, n_div)
     nn1, nnd1, f_inv1, n1 = _labels(native, n_div, case["source"])
@@ -209,6 +227,12 @@ def compute_class(case, cache_samples=True):
                 warnings.simplefilter("ignore")
                 ov.add(name, points)
     return ov.transform(case["source"], case["target"])
+
+
+def compute_vertex_areas_nn(case):
+    """Compute an areas case with ``Surface.vertex_areas_nn``."""
+    coords, faces = nb.geometry("midthickness", LR, case["native"])
+    return Surface(coords, faces).vertex_areas_nn()
 
 
 def compute_class_uncached(case):
