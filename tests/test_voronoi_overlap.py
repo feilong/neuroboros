@@ -1,10 +1,13 @@
+import gc
+import weakref
+
 import numpy as np
 import pytest
 import voronoi_reference as reference
 from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi
-from neuroboros.surface.voronoi import VoronoiSurface
+from neuroboros.surface.voronoi import VoronoiPartition, VoronoiSurface
 
 
 @pytest.fixture
@@ -462,8 +465,9 @@ def test_vertex_areas_nn(mesh, dtype, n_div, t_div):
 @pytest.mark.parametrize("chunk_size", [1, 7, 1000])
 def test_entries_chunk_size(mesh, chunk_size):
     """Several requests in one pass give the entries of each request alone."""
-    requests = [("native",), ("many",), ("native", "few"), ("many", "native")]
     ov, _ = _with_point_sets(mesh)
+    requests = [("native",), ("many",), ("native", "few"), ("many", "native")]
+    requests = [tuple(ov._named(name) for name in request) for request in requests]
     entries = ov._entries(requests, chunk_size=chunk_size)
     for request, request_entries in zip(requests, entries):
         for a, b in zip(request_entries, ov._entries([request])[0]):
@@ -576,7 +580,8 @@ def test_pass_shares_distances(mesh, monkeypatch):
     is_mixed = {name: ov._single_labels(ov._get(name)) < 0 for name in ("few", "some")}
     n_visited = (is_mixed["few"] | is_mixed["some"]).sum()
     assert max(is_mixed["few"].sum(), is_mixed["some"].sum()) < n_visited
-    for requests in [[("few", "some")], [("few", "some"), ("some", "few"), ("few",)]]:
+    few, some = ov._named("few"), ov._named("some")
+    for requests in [[(few, some)], [(few, some), (some, few), (few,)]]:
         calls.clear()
         ov._entries(requests, chunk_size=7)
         assert sum(calls) == n_visited < len(ov.faces)
@@ -617,3 +622,111 @@ def test_transform_unreachable_faces(mesh):
         ov.transform("native", "points")
     with pytest.raises(ValueError, match="cannot be reached"):
         ov.areas("points")
+
+
+# Partition objects.
+
+
+def test_native_partition(mesh):
+    coords, faces, _ = mesh
+    surface = VoronoiSurface(coords, faces)
+    assert surface._native is None
+    native = surface.native
+    assert isinstance(native, VoronoiPartition)
+    assert native is surface.native
+    assert native.surface is surface
+    assert native.n_cells == len(coords)
+    assert repr(native) == "<VoronoiPartition with 30 cells>"
+    np.testing.assert_array_equal(native.areas(), surface.areas("native"))
+    for attribute in ("surface", "n_cells"):
+        with pytest.raises(AttributeError):
+            setattr(native, attribute, None)
+    with pytest.raises(AttributeError):
+        native.name = "native"
+
+
+def test_partition_placement_routes(mesh, points):
+    """Points on the sphere, or faces and weights, give the same partition."""
+    coords, faces, sphere = mesh
+    surface = VoronoiSurface(coords, faces, sphere)
+    f_indices, weights = Sphere(sphere, faces).barycentric(
+        points, eps=1e-7, return_sparse=False
+    )
+    placed = surface.partition(points)
+    located = surface.partition(face_indices=f_indices, weights=weights)
+    assert placed is not located
+    assert placed.n_cells == located.n_cells == len(points)
+    for key, value in vars(placed._labels).items():
+        np.testing.assert_array_equal(getattr(located._labels, key), value)
+    _assert_identical(placed.overlap(surface.native), located.overlap(surface.native))
+    # The inputs are copied.
+    expected = located.areas()
+    f_indices[:] = 0
+    weights[:] = 0
+    np.testing.assert_array_equal(located.areas(), expected)
+
+
+def test_partitions_match_names(mesh):
+    """The partition methods give what the methods with names give."""
+    ov, placements = _with_point_sets(mesh)
+    surface = VoronoiSurface(ov.coords, ov.faces, sample_divisions=4)
+    partitions = {"native": surface.native}
+    for name, (f_indices, weights) in placements.items():
+        partitions[name] = surface.partition(face_indices=f_indices, weights=weights)
+    names = list(partitions)
+    for name in names:
+        np.testing.assert_array_equal(partitions[name].areas(), ov.areas(name))
+    pairs = [(a, b) for a in names for b in names]
+    mats = surface.overlaps([(partitions[a], partitions[b]) for a, b in pairs])
+    for (a, b), mat, expected in zip(pairs, mats, ov.transforms(pairs)):
+        _assert_identical(mat, expected)
+        _assert_identical(partitions[a].overlap(partitions[b]), expected)
+        assert mat.shape == (partitions[a].n_cells, partitions[b].n_cells)
+
+
+def test_overlaps_rejects_invalid(mesh):
+    coords, faces, _ = mesh
+    surface, other = VoronoiSurface(coords, faces), VoronoiSurface(coords, faces)
+    kwargs = dict(face_indices=[0, 5], weights=np.full((2, 3), 1 / 3))
+    a, b = surface.partition(**kwargs), other.partition(**kwargs)
+    for pairs in [[a], [(a,)], [(a, a, a)], (a, a), [(a, "native")], [(a, a), None]]:
+        with pytest.raises(TypeError, match="pair of partitions"):
+            surface.overlaps(pairs)
+    for pairs in [[(a, b)], [(b, a)], [(a, a), (b, b)], [(a, other.native)]]:
+        with pytest.raises(ValueError, match="belongs to another surface"):
+            surface.overlaps(pairs)
+    with pytest.raises(ValueError, match="belongs to another surface"):
+        a.overlap(b)
+    # Raised before anything is computed.
+    assert surface._native is None
+    assert surface.overlaps([]) == []
+
+
+def test_surface_is_released_with_its_partitions(mesh):
+    """No reference cycle keeps the graph until the next garbage collection."""
+    coords, faces, _ = mesh
+    gc.collect()
+    gc.disable()
+    try:
+        surface = VoronoiSurface(coords, faces)
+        native = surface.native
+        partition = surface.partition(face_indices=[0], weights=[[1, 0, 0]])
+        native.overlap(partition)
+        released = weakref.ref(surface)
+        del surface
+        # Each partition keeps its surface.
+        assert partition.surface is native.surface is released()
+        del native
+        assert released() is not None
+        del partition
+        assert released() is None
+
+        # A point set with a name does not keep its surface either.
+        surface = VoronoiSurface(coords, faces)
+        surface.add("point", f_indices=[0], weights=[[1, 0, 0]])
+        surface.transform("native", "point")
+        released = weakref.ref(surface)
+        del surface
+        assert released() is None
+    finally:
+        gc.enable()

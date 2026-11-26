@@ -1,5 +1,6 @@
 import functools
 import warnings
+import weakref
 from dataclasses import dataclass
 
 import numpy as np
@@ -562,13 +563,15 @@ def _overlap_transform(
 
 
 class VoronoiSurface:
-    """Overlap areas between the geodesic Voronoi cells of point sets.
+    """A surface that is divided into the geodesic Voronoi cells of points.
 
-    The point sets are the vertices of the mesh (``"native"``) and the point
-    sets added with ``add``. ``transform(a, b)[i, j]`` is the area of the
-    intersection of cell ``i`` of ``a`` and cell ``j`` of ``b``, measured on
-    ``coords``. ``transforms`` computes several of them in one pass over the
-    faces, which is faster than one call of ``transform`` for each.
+    A partition divides the surface into the cells of a set of points:
+    ``native`` for the vertices of the mesh, and ``partition`` for any other
+    points. For two partitions ``a`` and ``b``, ``a.overlap(b)[i, j]`` is the
+    area of the intersection of cell ``i`` of ``a`` and cell ``j`` of ``b``,
+    measured on ``coords``. ``overlaps`` computes several of these matrices
+    in one pass over the faces, which is faster than one call of ``overlap``
+    for each.
 
     Parameters
     ----------
@@ -579,7 +582,7 @@ class VoronoiSurface:
         The vertex indices of each triangle face.
     sphere : ndarray of shape (nv, 3) or None
         The registered sphere (e.g., sphere.reg) with the same faces, used by
-        ``add`` to place point sets given by their coordinates.
+        ``partition`` to place points given by their coordinates.
     edge_divisions : int
         The number of segments to divide each edge into for the graph. More
         segments give more accurate geodesic distances.
@@ -634,39 +637,55 @@ class VoronoiSurface:
         self._graph = graph
         self._face_nodes = _face_nodes(faces, face_edge_ids, edge_points)
         self._native = None
+        self._native_partition = None
         self._point_sets = {}
         self._placement = None
 
     @property
-    def names(self):
-        """The names of the point sets, starting with ``"native"``."""
-        return ("native", *self._point_sets)
+    def native(self):
+        """The partition whose cells belong to the vertices of the mesh.
 
-    def add(self, name, coords=None, *, f_indices=None, weights=None):
-        """Add a point set and label the graph nodes with its points.
+        The graph nodes are labelled on first access. The same object is
+        returned for as long as it is in use.
+        """
+        partition = self._native_partition and self._native_partition()
+        if partition is None:
+            if self._native is None:
+                self._native = self._label_vertices()
+            partition = VoronoiPartition(self, self._native)
+            # A partition refers to its surface. A reference back to it would
+            # form a cycle, which delays the release of the graph.
+            self._native_partition = weakref.ref(partition)
+        return partition
+
+    def partition(self, coords=None, *, face_indices=None, weights=None):
+        """Create the partition of a set of points.
 
         Give either the coordinates of the points on the unit sphere (placed
         on ``sphere`` with ``Sphere.barycentric``), or the face that contains
         each point and its barycentric weights. Any number of points can be
-        in the same face.
+        in the same face. The graph nodes are labelled with the points here,
+        with one shortest-path search.
 
         Parameters
         ----------
-        name : str
-            The name of the point set. It must be new and not ``"native"``.
         coords : ndarray of shape (n, 3) or None
             The coordinates of the points on the unit sphere.
-        f_indices : ndarray of shape (n,) or None
+        face_indices : ndarray of shape (n,) or None
             The face that contains each point.
         weights : ndarray of shape (n, 3) or None
             The barycentric weights of each point in its face.
+
+        Returns
+        -------
+        partition : VoronoiPartition
+            A new partition with ``n`` cells. The surface does not keep it.
         """
-        if name in self.names:
-            raise ValueError(f"A point set named {name!r} already exists.")
+        f_indices = face_indices
         if coords is not None:
             if f_indices is not None or weights is not None:
                 raise ValueError(
-                    "Give either coords or f_indices and weights, not both."
+                    "Give either coords or face_indices and weights, not both."
                 )
             if self.sphere is None:
                 raise ValueError("Placing points by coordinates requires sphere.")
@@ -681,12 +700,12 @@ class VoronoiSurface:
                 coords, eps=1e-7, return_sparse=False
             )
         elif f_indices is None or weights is None:
-            raise ValueError("Give either coords or both f_indices and weights.")
+            raise ValueError("Give either coords or both face_indices and weights.")
 
         f_indices = np.array(f_indices)
         weights = _finite_copy(weights, "weights")
         if f_indices.ndim != 1 or not np.issubdtype(f_indices.dtype, np.integer):
-            raise ValueError("f_indices must be a 1-D array of integers.")
+            raise ValueError("face_indices must be a 1-D array of integers.")
         if weights.shape != (len(f_indices), 3):
             raise ValueError(
                 f"weights must have shape ({len(f_indices)}, 3), not {weights.shape}."
@@ -694,9 +713,25 @@ class VoronoiSurface:
         if f_indices.size and (
             f_indices.min() < 0 or f_indices.max() >= len(self.faces)
         ):
-            raise ValueError("f_indices contain face indices out of range.")
+            raise ValueError("face_indices contain face indices out of range.")
         f_indices = f_indices.astype(np.intp, copy=False)
-        self._point_sets[name] = self._label_points(f_indices, weights)
+        return VoronoiPartition(self, self._label_points(f_indices, weights))
+
+    @property
+    def names(self):
+        """The names of the point sets, starting with ``"native"``."""
+        return ("native", *self._point_sets)
+
+    def add(self, name, coords=None, *, f_indices=None, weights=None):
+        """Create a partition as ``partition`` does and keep it as ``name``.
+
+        The name must be new and not ``"native"``.
+        """
+        if name in self.names:
+            raise ValueError(f"A point set named {name!r} already exists.")
+        # Keep the labels and not the partition, which refers to the surface.
+        partition = self.partition(coords, face_indices=f_indices, weights=weights)
+        self._point_sets[name] = partition._labels
 
     def discard(self, name):
         """Remove a point set and its labels.
@@ -705,53 +740,55 @@ class VoronoiSurface:
         again when needed.
         """
         if name == "native":
-            self._native = None
+            self._native = self._native_partition = None
         else:
             self._get(name)
             del self._point_sets[name]
 
-    def transforms(self, pairs):
-        """Overlap areas for several pairs of point sets.
+    def overlaps(self, pairs):
+        """Overlap areas for several pairs of partitions.
 
-        All pairs are computed in one pass over the faces, and the point sets
+        All pairs are computed in one pass over the faces, and the partitions
         share the work that does not depend on them. Each matrix is the one
-        that ``transform`` returns for that pair. The samples are labelled
-        again in every call, so it is faster to ask for all pairs at once.
+        that ``source.overlap(target)`` returns for that pair. The samples
+        are labelled again in every call, so it is faster to ask for all
+        pairs at once.
 
         Parameters
         ----------
-        pairs : sequence of (str, str)
-            The names of the source and target point sets of each matrix. A
-            pair can be given more than once, and so can its reverse.
+        pairs : sequence of (VoronoiPartition, VoronoiPartition)
+            The source and target partitions of each matrix, which must be
+            partitions of this surface. A pair can be given more than once,
+            and so can its reverse.
 
         Returns
         -------
         mats : list of scipy.sparse.csr_matrix
-            One new matrix for each pair, in the order of ``pairs``. The
-            matrices do not share memory.
+            One new matrix for each pair, in the order of ``pairs``, with
+            shape (source.n_cells, target.n_cells). The matrices do not share
+            memory.
         """
         pairs = list(pairs)
         for pair in pairs:
             if (
                 not isinstance(pair, (tuple, list))
                 or len(pair) != 2
-                or not all(isinstance(name, str) for name in pair)
+                or not all(isinstance(item, VoronoiPartition) for item in pair)
             ):
                 raise TypeError(
                     f"Each item of pairs must be a (source, target) pair of "
-                    f"names, not {pair!r}."
+                    f"partitions, not {pair!r}."
                 )
+            if any(partition.surface is not self for partition in pair):
+                raise ValueError("A partition belongs to another surface.")
         pairs = [tuple(pair) for pair in pairs]
-        for name in dict.fromkeys(name for pair in pairs for name in pair):
-            if name not in self.names:
-                raise KeyError(f"No point set named {name!r}.")
 
         # A pair that is given several times is computed once.
         requests = list(dict.fromkeys(pairs))
         entries = dict(zip(requests, self._entries(requests)))
         mats = []
         for source, target in pairs:
-            n_source, n_target = self._get(source).size, self._get(target).size
+            n_source, n_target = source.n_cells, target.n_cells
             _, keys, values = entries[source, target]
             unique_keys, inverse = np.unique(keys, return_inverse=True)
             totals = np.zeros(len(unique_keys))
@@ -768,56 +805,60 @@ class VoronoiSurface:
             mats.append(mat)
         return mats
 
+    def transforms(self, pairs):
+        """``overlaps`` for pairs of names."""
+        pairs = list(pairs)
+        for pair in pairs:
+            if (
+                not isinstance(pair, (tuple, list))
+                or len(pair) != 2
+                or not all(isinstance(name, str) for name in pair)
+            ):
+                raise TypeError(
+                    f"Each item of pairs must be a (source, target) pair of "
+                    f"names, not {pair!r}."
+                )
+        names = dict.fromkeys(name for pair in pairs for name in pair)
+        for name in names:
+            if name not in self.names:
+                raise KeyError(f"No point set named {name!r}.")
+        # One partition for each name, so that equal pairs are computed once.
+        named = {name: self._named(name) for name in names}
+        return self.overlaps(
+            [(named[source], named[target]) for source, target in pairs]
+        )
+
     def transform(self, source, target):
-        """Overlap areas between the Voronoi cells of two point sets.
-
-        Parameters
-        ----------
-        source, target : str
-            The names of the point sets.
-
-        Returns
-        -------
-        mat : scipy.sparse.csr_matrix of shape (n_source, n_target)
-            ``mat[i, j]`` is the area of the intersection of cell ``i`` of
-            ``source`` and cell ``j`` of ``target``. The matrix is computed
-            on every call. ``transform(b, a)`` equals ``transform(a, b).T``
-            exactly, and ``transform(a, a)`` is diagonal, with ``areas(a)``
-            on its diagonal.
-        """
+        """``VoronoiPartition.overlap`` for two names."""
         return self.transforms([(source, target)])[0]
 
     def areas(self, name):
-        """The area of the Voronoi cell of each point of a point set.
-
-        Return a new array of shape (n_points,). For ``"native"``, this
-        equals ``Surface.vertex_areas_nn`` exactly. Transform row sums can
-        differ slightly because they group the additions differently.
-        """
-        ((_, keys, values),) = self._entries([(name,)])
-        areas = np.zeros(self._get(name).size)
-        np.add.at(areas, keys, values)
-        return areas
+        """``VoronoiPartition.areas`` for a name."""
+        return self._named(name).areas()
 
     def _entries(self, requests, chunk_size=64):
         """Return the area contributions of every face for each request.
 
-        A request is a tuple with the names of one or two point sets. Its
-        result is three parallel arrays: face indices, keys and areas. Each
-        face contributes one entry per label of the point set (or per pair of
-        labels of the two point sets) that its samples have, with the key
-        ``label`` (or ``label * n_second + second_label``). The area is
+        A request is a tuple of one or two partitions. Its result is three
+        parallel arrays: face indices, keys and areas. Each face contributes
+        one entry per label of the partition (or per pair of labels of the
+        two partitions) that its samples have, with the key ``label`` (or
+        ``label * n_second + second_label``). The area is
         ``count / n_samples * face_area``, as in ``compute_overlap``. Entries
         are sorted by face, so that ``np.add.at`` adds the areas of each key
         in face order, as the in-place additions of ``compute_overlap`` do.
 
-        All requests are served by one pass over the faces, and the point
-        sets use the same sample distances.
+        All requests are served by one pass over the faces, and the
+        partitions use the same sample distances.
         """
-        names = list(dict.fromkeys(name for request in requests for name in request))
-        point_sets = {name: self._get(name) for name in names}
-        single = {name: self._single_labels(point_sets[name]) for name in names}
-        is_mixed = {name: single[name] < 0 for name in names}
+        partitions = list(
+            dict.fromkeys(partition for request in requests for partition in request)
+        )
+        single = {
+            partition: self._single_labels(partition._labels)
+            for partition in partitions
+        }
+        is_mixed = {partition: single[partition] < 0 for partition in partitions}
         n_samples = len(self._ww)
 
         def encode_labels(request, labels):
@@ -825,42 +866,46 @@ class VoronoiSurface:
             # because int32 times a Python int stays int32 and could wrap.
             keys = labels[0].astype(np.int64)
             if len(request) == 2:
-                keys = keys * point_sets[request[1]].size + labels[1]
+                keys = keys * request[1].n_cells + labels[1]
             return keys
 
         # Faces where every set of a request has one label give one entry.
         parts = []
         for request in requests:
-            is_single = ~np.logical_or.reduce([is_mixed[name] for name in request])
+            is_single = ~np.logical_or.reduce(
+                [is_mixed[partition] for partition in request]
+            )
             single_faces = np.flatnonzero(is_single)
             keys = encode_labels(
-                request, [single[name][single_faces] for name in request]
+                request, [single[partition][single_faces] for partition in request]
             )
             counts = np.full(len(single_faces), n_samples)
             parts.append(([single_faces], [keys], [counts]))
 
         any_mixed = np.zeros(len(self.faces), dtype=bool)
-        for name in names:
-            any_mixed |= is_mixed[name]
+        for partition in partitions:
+            any_mixed |= is_mixed[partition]
         visited_faces = np.flatnonzero(any_mixed)
         for start in range(0, len(visited_faces), chunk_size):
             face_indices = visited_faces[start : start + chunk_size]
             boundary = self._boundary_distances(face_indices)
             labels = {
-                name: self._face_labels(
-                    point_sets[name], single[name], face_indices, *boundary
+                partition: self._face_labels(
+                    partition._labels, single[partition], face_indices, *boundary
                 )
-                for name in names
+                for partition in partitions
             }
             for request, (face_parts, key_parts, count_parts) in zip(requests, parts):
                 # The faces where both sets have one label are counted above.
                 rows = np.zeros(len(face_indices), dtype=bool)
-                for name in request:
-                    rows |= is_mixed[name][face_indices]
+                for partition in request:
+                    rows |= is_mixed[partition][face_indices]
                 if not rows.any():
                     continue
                 sorted_keys = np.sort(
-                    encode_labels(request, [labels[name][rows] for name in request]),
+                    encode_labels(
+                        request, [labels[partition][rows] for partition in request]
+                    ),
                     axis=1,
                 )
                 # Each row is one face. Mark the start of every run of equal
@@ -906,14 +951,16 @@ class VoronoiSurface:
         return labels
 
     def _get(self, name):
-        """Return the labels of a point set, labelling ``"native"`` if needed."""
+        """Return the labels of a named partition."""
+        return self._named(name)._labels
+
+    def _named(self, name):
+        """Return a partition for a name, labelling ``"native"`` if needed."""
         if name == "native":
-            if self._native is None:
-                self._native = self._label_vertices()
-            return self._native
+            return self.native
         if name not in self._point_sets:
             raise KeyError(f"No point set named {name!r}.")
-        return self._point_sets[name]
+        return VoronoiPartition(self, self._point_sets[name])
 
     def _label_vertices(self):
         """Label the graph nodes with the nearest mesh vertex."""
@@ -1066,6 +1113,66 @@ class VoronoiSurface:
             point_set.inside_ptr[sample_faces[inside]] + local[inside] - n_boundary
         ]
         return decoded
+
+
+class VoronoiPartition:
+    """The geodesic Voronoi cells of a set of points on a surface.
+
+    Cell ``i`` is the part of the surface that is nearest to point ``i``.
+    Partitions are created by ``VoronoiSurface.native`` and
+    ``VoronoiSurface.partition``, not directly, and they do not change.
+    """
+
+    __slots__ = ("_surface", "_labels", "__weakref__")
+
+    def __init__(self, surface, labels):
+        self._surface = surface
+        self._labels = labels
+
+    def __repr__(self):
+        return f"<VoronoiPartition with {self.n_cells} cells>"
+
+    @property
+    def surface(self):
+        """The ``VoronoiSurface`` that the partition divides."""
+        return self._surface
+
+    @property
+    def n_cells(self):
+        """The number of cells, one for each point, in the order of the points."""
+        return self._labels.size
+
+    def overlap(self, other):
+        """Overlap areas between the cells of this partition and of another.
+
+        Parameters
+        ----------
+        other : VoronoiPartition
+            A partition of the same surface.
+
+        Returns
+        -------
+        mat : scipy.sparse.csr_matrix of shape (n_cells, other.n_cells)
+            ``mat[i, j]`` is the area of the intersection of cell ``i`` of
+            this partition and cell ``j`` of ``other``, in the square of the
+            unit of the coordinates. The matrix is computed on every call.
+            ``b.overlap(a)`` equals ``a.overlap(b).T`` exactly, and
+            ``a.overlap(a)`` is diagonal, with ``a.areas()`` on its diagonal.
+        """
+        return self._surface.overlaps([(self, other)])[0]
+
+    def areas(self):
+        """The area of each cell.
+
+        Return a new array of shape (n_cells,). For the native partition,
+        this equals ``Surface.vertex_areas_nn`` exactly. The row sums of an
+        overlap can differ slightly, because they group the additions
+        differently.
+        """
+        ((_, keys, values),) = self._surface._entries([(self,)])
+        areas = np.zeros(self.n_cells)
+        np.add.at(areas, keys, values)
+        return areas
 
 
 @dataclass
