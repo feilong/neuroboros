@@ -241,6 +241,17 @@ def compute_class_uncached(case):
     return compute_class(case, cache_samples=False)
 
 
+def compute_class_batch(case):
+    """Compute a case with ``VoronoiOverlap.transforms``, among other pairs."""
+    if case["kind"] == "areas":
+        return compute_class(case, cache_samples=False)
+    compute_class(case, cache_samples=False)
+    ov = _overlap_object(case["native"], case["n_div"], case["t_div"], False)
+    source, target = case["source"], case["target"]
+    pairs = [(target, target), (target, source), (source, target)]
+    return ov.transforms(pairs)[2]
+
+
 def load():
     with open(GOLDEN_FN) as f:
         return json.load(f)

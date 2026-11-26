@@ -86,10 +86,8 @@ def run_request(surface, request):
     """Return the outputs of one request by name."""
     if request == "areas":
         return {"areas native": surface.areas("native")}
-    return {
-        f"{source} to {target}": surface.transform(source, target)
-        for source, target in request
-    }
+    mats = surface.transforms(request)
+    return {f"{a} to {b}": mat for (a, b), mat in zip(request, mats)}
 
 
 def install_timers(stage_times):

@@ -567,7 +567,8 @@ class VoronoiOverlap:
     The point sets are the vertices of the mesh (``"native"``) and the point
     sets added with ``add``. ``transform(a, b)[i, j]`` is the area of the
     intersection of cell ``i`` of ``a`` and cell ``j`` of ``b``, measured on
-    ``coords``.
+    ``coords``. ``transforms`` computes several of them in one pass over the
+    faces, which is faster than one call of ``transform`` for each.
 
     Parameters
     ----------
@@ -586,9 +587,9 @@ class VoronoiOverlap:
     cache_samples : bool
         Whether to keep the sample labels of each point set once computed
         (about 1 byte per sample of each face). Without the cache, every
-        ``transform`` and ``areas`` call labels the samples again. In both
-        cases, the point sets that are labelled in the same call share the
-        sample distances.
+        ``transforms``, ``transform`` and ``areas`` call labels the samples
+        again. In both cases, the point sets that are labelled in the same
+        call share the sample distances.
     """
 
     def __init__(
@@ -730,6 +731,63 @@ class VoronoiOverlap:
         else:
             raise KeyError(f"No point set named {name!r}.")
 
+    def transforms(self, pairs):
+        """Overlap areas for several pairs of point sets.
+
+        All pairs are computed in one pass over the faces, and the point sets
+        share the work that does not depend on them. Each matrix is the one
+        that ``transform`` returns for that pair.
+
+        Parameters
+        ----------
+        pairs : sequence of (str, str)
+            The names of the source and target point sets of each matrix. A
+            pair can be given more than once, and so can its reverse.
+
+        Returns
+        -------
+        mats : list of scipy.sparse.csr_matrix
+            One new matrix for each pair, in the order of ``pairs``. The
+            matrices do not share memory.
+        """
+        pairs = list(pairs)
+        for pair in pairs:
+            if (
+                not isinstance(pair, (tuple, list))
+                or len(pair) != 2
+                or not all(isinstance(name, str) for name in pair)
+            ):
+                raise TypeError(
+                    f"Each item of pairs must be a (source, target) pair of "
+                    f"names, not {pair!r}."
+                )
+        pairs = [tuple(pair) for pair in pairs]
+        for name in dict.fromkeys(name for pair in pairs for name in pair):
+            if name not in self.names:
+                raise KeyError(f"No point set named {name!r}.")
+
+        # A pair that is given several times is computed once.
+        requests = list(dict.fromkeys(pairs))
+        entries = dict(zip(requests, self._entries(requests)))
+        mats = []
+        for source, target in pairs:
+            n_source, n_target = self._get(source).size, self._get(target).size
+            _, keys, values = entries[source, target]
+            unique_keys, inverse = np.unique(keys, return_inverse=True)
+            totals = np.zeros(len(unique_keys))
+            # Accumulate individual face contributions in face order.
+            np.add.at(totals, inverse, values)
+
+            # Sorted keys encode row * n_target + column. Each pair is unique,
+            # so CSR construction does not need to sort or sum duplicates.
+            rows, cols = np.divmod(unique_keys, n_target)
+            row_counts = np.bincount(rows, minlength=n_source)
+            indptr = np.concatenate([[0], np.cumsum(row_counts)])
+            mat = sparse.csr_matrix((totals, cols, indptr), shape=(n_source, n_target))
+            mat.eliminate_zeros()
+            mats.append(mat)
+        return mats
+
     def transform(self, source, target):
         """Overlap areas between the Voronoi cells of two point sets.
 
@@ -744,23 +802,10 @@ class VoronoiOverlap:
             ``mat[i, j]`` is the area of the intersection of cell ``i`` of
             ``source`` and cell ``j`` of ``target``. The matrix is computed
             on every call. ``transform(b, a)`` equals ``transform(a, b).T``
-            exactly.
+            exactly, and ``transform(a, a)`` is diagonal, with ``areas(a)``
+            on its diagonal.
         """
-        n_source, n_target = self._get(source).size, self._get(target).size
-        ((_, keys, values),) = self._entries([(source, target)])
-        unique_keys, inverse = np.unique(keys, return_inverse=True)
-        totals = np.zeros(len(unique_keys))
-        # Accumulate individual face contributions in face order.
-        np.add.at(totals, inverse, values)
-
-        # Sorted keys encode row * n_target + column. Each pair is unique,
-        # so CSR construction does not need to sort or sum duplicate entries.
-        rows, cols = np.divmod(unique_keys, n_target)
-        row_counts = np.bincount(rows, minlength=n_source)
-        indptr = np.concatenate([[0], np.cumsum(row_counts)])
-        mat = sparse.csr_matrix((totals, cols, indptr), shape=(n_source, n_target))
-        mat.eliminate_zeros()
-        return mat
+        return self.transforms([(source, target)])[0]
 
     def areas(self, name):
         """The area of the Voronoi cell of each point of a point set.

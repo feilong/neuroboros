@@ -528,6 +528,102 @@ def test_entries_chunk_size(mesh, chunk_size, cache_samples):
                 np.testing.assert_array_equal(a, b)
 
 
+SIX_SETS = (("a", 3), ("b", 5), ("c", 17), ("d", 40), ("e", 200))
+
+
+@pytest.mark.parametrize("cache_samples", [True, False])
+def test_transforms_all_pairs(mesh, cache_samples):
+    """All ordered pairs of six point sets in one pass."""
+    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
+    single, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
+    pairs = [(a, b) for a in ov.names for b in ov.names]
+    mats = ov.transforms(pairs)
+    assert len(mats) == 36
+    for pair, mat in zip(pairs, mats):
+        _assert_identical(mat, single.transform(*pair))
+
+
+@pytest.mark.parametrize("cache_samples", [True, False])
+def test_transforms_composition_and_order(mesh, cache_samples):
+    """A matrix does not depend on the other pairs of the call, on their
+    order, or on which point sets have cached labels."""
+    single, _ = _with_point_sets(mesh, sizes=SIX_SETS)
+    names = single.names
+    expected = {(a, b): single.transform(a, b) for a in names for b in names}
+    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
+    rng = np.random.default_rng(0)
+    for _ in range(10):
+        # With repeated pairs.
+        indices = rng.integers(0, len(expected), rng.integers(1, 8))
+        pairs = [list(expected)[i] for i in indices]
+        mats = ov.transforms(pairs)
+        assert len(mats) == len(pairs)
+        for pair, mat in zip(pairs, mats):
+            _assert_identical(mat, expected[pair])
+
+
+def test_transforms_special_requests(mesh):
+    ov, _ = _with_point_sets(mesh)
+    assert ov.transforms([]) == []
+    assert ov._native is None
+
+    pairs = [("native", "many"), ("many", "native"), ("native", "many")]
+    mat, reverse, repeated = ov.transforms(pairs + [("many", "many")])[:3]
+    _assert_identical(reverse, mat.T)
+    _assert_identical(repeated, mat)
+    expected = mat.copy()
+    for x in (repeated, reverse):
+        x.data[:] = 0
+        x.indices[:] = 0
+        x.indptr[:] = 0
+    _assert_identical(mat, expected)
+    _assert_identical(ov.transform("native", "many"), expected)
+    # A list is accepted as a pair, and any iterable as the pairs.
+    _assert_identical(ov.transforms(iter([["native", "many"]]))[0], expected)
+
+
+@pytest.mark.parametrize("cache_samples", [True, False])
+def test_self_overlap(mesh, cache_samples):
+    ov, _ = _with_point_sets(mesh, cache_samples=cache_samples)
+    for name, mat in zip(ov.names, ov.transforms([(n, n) for n in ov.names])):
+        diagonal = mat.diagonal()
+        assert mat.nnz == np.count_nonzero(diagonal)
+        np.testing.assert_array_equal(diagonal, ov.areas(name))
+
+
+@pytest.mark.parametrize(
+    "pairs, error",
+    [
+        ([("native",)], TypeError),
+        ([("native", "few", "many")], TypeError),
+        (["native"], TypeError),
+        (("native", "many"), TypeError),
+        ([("native", 1)], TypeError),
+        ([("native", "many"), None], TypeError),
+        ([("native", "other")], KeyError),
+        ([("native", "many"), ("other", "many")], KeyError),
+    ],
+)
+def test_transforms_rejects_invalid(mesh, pairs, error):
+    ov, _ = _with_point_sets(mesh)
+    with pytest.raises(error, match="pair of names|No point set named 'other'"):
+        ov.transforms(pairs)
+    # Raised before anything is computed.
+    assert ov._native is None
+
+
+@pytest.mark.parametrize("scale", [2.0, 0.25])
+def test_scaling_by_power_of_two_is_exact(mesh, scale):
+    coords, faces, sphere = mesh
+    ov, _ = _with_point_sets(mesh)
+    scaled, _ = _with_point_sets((coords * scale, faces, sphere))
+    pairs = [("native", "many"), ("few", "many")]
+    for mat, scaled_mat in zip(ov.transforms(pairs), scaled.transforms(pairs)):
+        mat.data *= scale**2
+        _assert_identical(scaled_mat, mat)
+    np.testing.assert_array_equal(scaled.areas("many"), ov.areas("many") * scale**2)
+
+
 def test_pass_shares_distances(mesh, monkeypatch):
     """Point sets labelled in one pass share the distances of each face, and
     cached labels need none."""
