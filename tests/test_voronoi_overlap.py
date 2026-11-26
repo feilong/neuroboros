@@ -280,6 +280,12 @@ def _expected_samples(ov, name, f_indices=None, weights=None):
     return expected
 
 
+def _labelled(ov, name, chunk_size=64):
+    """The sample labels of a point set, as the pass of ``_entries`` stores them."""
+    ov._entries([(name,)], chunk_size=chunk_size)
+    return ov._sample_labels_cache[name]
+
+
 def _decoded_samples(ov, name, sample_labels):
     decoded = np.repeat(sample_labels.single[:, np.newaxis], len(ov._ww), axis=1)
     decoded[sample_labels.mixed_faces] = ov._decode(
@@ -303,7 +309,7 @@ def test_sample_labels(mesh, n_div, t_div, n_points):
         placement = dict(f_indices=f_indices, weights=weights)
         name = "points"
         ov.add(name, **placement)
-    sample_labels = ov._sample_labels(ov._get(name))
+    sample_labels = _labelled(ov, name)
     expected = _expected_samples(ov, name, **placement)
 
     np.testing.assert_array_equal(_decoded_samples(ov, name, sample_labels), expected)
@@ -343,7 +349,7 @@ def test_sample_labels_ties(n_div, t_div):
         ("native", {}),
         ("points", dict(f_indices=f_indices, weights=weights)),
     ]:
-        sample_labels = ov._sample_labels(ov._get(name))
+        sample_labels = _labelled(ov, name)
         expected = _expected_samples(ov, name, **placement)
         np.testing.assert_array_equal(
             _decoded_samples(ov, name, sample_labels), expected
@@ -356,9 +362,10 @@ def test_sample_labels_chunk_size(mesh, points, chunk_size):
     ov = VoronoiOverlap(*mesh, t_div=4)
     ov.add("points", points)
     for name in ov.names:
-        expected = ov._sample_labels(ov._get(name))
-        sample_labels = ov._sample_labels(ov._get(name), chunk_size=chunk_size)
-        for key, value in vars(expected).items():
+        expected = vars(_labelled(ov, name)).copy()
+        ov.clear_cache()
+        sample_labels = _labelled(ov, name, chunk_size=chunk_size)
+        for key, value in expected.items():
             np.testing.assert_array_equal(getattr(sample_labels, key), value)
 
 
@@ -372,7 +379,7 @@ def test_sample_labels_dtype(mesh, n_inside, dtype):
     f_indices = np.concatenate([np.full(n_inside, 3), others])
     weights = rng.dirichlet(np.ones(3), len(f_indices))
     ov.add("points", f_indices=f_indices, weights=weights)
-    sample_labels = ov._sample_labels(ov._get("points"))
+    sample_labels = _labelled(ov, "points")
     assert sample_labels.local.dtype == dtype
     expected = _expected_samples(ov, "points", f_indices, weights)
     np.testing.assert_array_equal(
@@ -510,12 +517,39 @@ def test_vertex_areas_nn(mesh, dtype, n_div, t_div):
 @pytest.mark.parametrize("cache_samples", [True, False])
 @pytest.mark.parametrize("chunk_size", [1, 7, 1000])
 def test_entries_chunk_size(mesh, chunk_size, cache_samples):
+    requests = [("native",), ("many",), ("native", "few"), ("many", "native")]
+    expected, _ = _with_point_sets(mesh, cache_samples=cache_samples)
     ov, _ = _with_point_sets(mesh, cache_samples=cache_samples)
-    for names in [("native",), ("many",), ("native", "few"), ("many", "native")]:
-        expected = ov._entries(*names)
-        entries = ov._entries(*names, chunk_size=chunk_size)
-        for a, b in zip(entries, expected):
-            np.testing.assert_array_equal(a, b)
+    # Once together and, with the cache, once more from the cached labels.
+    for _ in range(2):
+        entries = ov._entries(requests, chunk_size=chunk_size)
+        for request, request_entries in zip(requests, entries):
+            for a, b in zip(request_entries, expected._entries([request])[0]):
+                np.testing.assert_array_equal(a, b)
+
+
+def test_pass_shares_distances(mesh, monkeypatch):
+    """Point sets labelled in one pass share the distances of each face, and
+    cached labels need none."""
+    ov, _ = _with_point_sets(mesh)
+    calls = []
+    boundary_distances = ov._boundary_distances
+    monkeypatch.setattr(
+        ov,
+        "_boundary_distances",
+        lambda faces: calls.append(len(faces)) or boundary_distances(faces),
+    )
+    ov._entries([("few", "many"), ("many", "few"), ("few",)])
+    is_mixed = {name: ov._sample_labels_cache[name].single < 0 for name in ov.names[1:]}
+    assert 0 < is_mixed["few"].sum() < is_mixed["many"].sum()
+    assert sum(calls) == (is_mixed["few"] | is_mixed["many"]).sum()
+    calls.clear()
+    ov._entries([("few", "many")])
+    assert calls == []
+    # Only the faces that the new point set needs.
+    ov.clear_cache("few")
+    ov._entries([("few", "many")])
+    assert sum(calls) == is_mixed["few"].sum()
 
 
 def test_transform_returns_new_arrays(mesh):
@@ -578,8 +612,8 @@ def test_uncached_transform(mesh, monkeypatch):
     )
     for names in [("native", "many"), ("few", "many"), ("many",)]:
         calls.clear()
-        entries = ov._entries(*names, chunk_size=7)
-        expected = cached._entries(*names, chunk_size=7)
+        (entries,) = ov._entries([names], chunk_size=7)
+        (expected,) = cached._entries([names], chunk_size=7)
         for a, b in zip(entries, expected):
             np.testing.assert_array_equal(a, b)
         # The two point sets share the distances of each chunk.
