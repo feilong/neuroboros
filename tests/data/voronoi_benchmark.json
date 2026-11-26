@@ -1,0 +1,1525 @@
+[
+ {
+  "source": "v0.1.5-313-g0846bec",
+  "date": "2026-11-26",
+  "note": "Before this work: VoronoiOverlap with cached sample labels, one pair at a time (commit 'Compare the tests with a frozen copy of the old functions.'; the library is that of bca07ae).",
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   },
+   "areas native": {
+    "shape": [
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "sha256": "b6af787ee8dd9fa3d1e8815a7f9edfad5171bd77ba4614d23bf6ea423c5d51df"
+   }
+  },
+  "workloads": {
+   "single, cache on": {
+    "total": 56.46642391604837,
+    "peak_memory_gb": 5.93010688,
+    "steps": {
+     "surface": 6.052413541008718,
+     "partitions": 4.530146791948937,
+     "requests": [
+      45.879197750007734
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.975861000013538,
+     "dijkstra": 7.451993459020741,
+     "label_points": 3.946056333021261,
+     "boundary_distances": 21.34444783779327,
+     "local_labels": 15.123518941458315,
+     "decode": 3.3799572883872315
+    },
+    "outputs": [
+     "native to onavg-ico32"
+    ],
+    "totals": [
+     56.46642391604837
+    ]
+   },
+   "separate_tt, cache on": {
+    "total": 148.96696899994276,
+    "peak_memory_gb": 6.201442304,
+    "steps": {
+     "surface": 5.7622249169507995,
+     "partitions": 16.450539541896433,
+     "requests": [
+      45.61265095800627,
+      35.327606125036255,
+      41.22229962493293,
+      4.57834075007122
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.689777249936014,
+     "dijkstra": 13.710003750049509,
+     "label_points": 10.650167417014018,
+     "boundary_distances": 52.918216276564635,
+     "local_labels": 45.8408859281335,
+     "decode": 15.027836287510581
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     148.96696899994276
+    ]
+   },
+   "partial, cache on": {
+    "total": 148.97940516693052,
+    "peak_memory_gb": 6.150127616,
+    "steps": {
+     "surface": 5.825853666989133,
+     "partitions": 16.335944625083357,
+     "requests": [
+      80.72931337496266,
+      46.0753730830038
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.75167241692543,
+     "dijkstra": 13.708778335130773,
+     "label_points": 10.640050083049573,
+     "boundary_distances": 52.837771056219935,
+     "local_labels": 45.48370320419781,
+     "decode": 15.67023362708278
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     148.97940516693052
+    ]
+   },
+   "areas, cache on": {
+    "total": 37.81960154103581,
+    "peak_memory_gb": 6.156156928,
+    "steps": {
+     "surface": 5.815116000012495,
+     "partitions": 3.1660310924053192e-06,
+     "requests": [
+      32.00371620897204
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.739891042001545,
+     "dijkstra": 3.6306662920396775,
+     "boundary_distances": 14.46430407918524,
+     "local_labels": 9.964655564865097,
+     "decode": 2.443482454866171
+    },
+    "outputs": [
+     "areas native"
+    ],
+    "totals": [
+     37.81960154103581
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-315-gf3ea725",
+  "date": "2026-11-26",
+  "note": "One pass for several pairs, with and without the sample cache (commit 'Add VoronoiOverlap.transforms for several pairs in one call.').",
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   }
+  },
+  "workloads": {
+   "batch_tt, cache on": {
+    "total": 117.34528970893007,
+    "peak_memory_gb": 6.436257792,
+    "steps": {
+     "surface": 5.433509458904155,
+     "partitions": 16.499045333941467,
+     "requests": [
+      95.39963862497825
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.35922666604165,
+     "dijkstra": 13.841252208920196,
+     "label_points": 10.77765608287882,
+     "boundary_distances": 16.54098978510592,
+     "local_labels": 50.64213659893721,
+     "decode": 9.236411704798229
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     117.34528970893007
+    ]
+   },
+   "separate_tt, cache on": {
+    "total": 147.0993222920224,
+    "peak_memory_gb": 6.297550848,
+    "steps": {
+     "surface": 5.575254625058733,
+     "partitions": 16.498973082983866,
+     "requests": [
+      47.2379029589938,
+      34.67044145904947,
+      38.391391124925576,
+      4.71229587495327
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.500792167033069,
+     "dijkstra": 13.855987500050105,
+     "label_points": 10.7754033759702,
+     "boundary_distances": 45.47061059391126,
+     "local_labels": 47.058107505436055,
+     "decode": 16.46285406977404
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     147.0993222920224
+    ]
+   },
+   "partial, cache on": {
+    "total": 140.0122029579943,
+    "peak_memory_gb": 6.16071168,
+    "steps": {
+     "surface": 5.827255500014871,
+     "partitions": 16.3874174579978,
+     "requests": [
+      71.81133279192727,
+      45.972974749980494
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.752929707989097,
+     "dijkstra": 13.72585508285556,
+     "label_points": 10.655214792932384,
+     "boundary_distances": 33.052516222698614,
+     "local_labels": 50.130087001714855,
+     "decode": 14.493932973709889
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     140.0122029579943
+    ]
+   },
+   "batch_tt, cache off": {
+    "total": 116.076143042068,
+    "peak_memory_gb": 6.236110848,
+    "steps": {
+     "surface": 5.685796125093475,
+     "partitions": 16.43724637501873,
+     "requests": [
+      93.94064500008244
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.611909041996114,
+     "dijkstra": 13.787655581953004,
+     "label_points": 10.714329458074644,
+     "boundary_distances": 16.53411068278365,
+     "local_labels": 50.225268039270304,
+     "decode": 8.759496567538008
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     116.076143042068
+    ]
+   },
+   "separate_tt, cache off": {
+    "total": 224.71450162504334,
+    "peak_memory_gb": 6.15440384,
+    "steps": {
+     "surface": 5.726301959017292,
+     "partitions": 16.400713250041008,
+     "requests": [
+      47.30898129194975,
+      54.63842395809479,
+      53.32819762500003,
+      47.29871766699944
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.643672999925911,
+     "dijkstra": 13.728611582890153,
+     "label_points": 10.654999209102243,
+     "boundary_distances": 65.01732293819077,
+     "local_labels": 93.9786889309762,
+     "decode": 17.178220880334266
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     224.71450162504334
+    ]
+   },
+   "partial, cache off": {
+    "total": 177.6467489999486,
+    "peak_memory_gb": 5.897814016,
+    "steps": {
+     "surface": 5.897689374978654,
+     "partitions": 16.37594283395447,
+     "requests": [
+      70.26213608391117,
+      85.09755275002681
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.813982625026256,
+     "dijkstra": 13.766249833046459,
+     "label_points": 10.694579126080498,
+     "boundary_distances": 33.05815337738022,
+     "local_labels": 82.39784020872321,
+     "decode": 14.249387730262242
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     177.6467489999486
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-328-gd4534c3",
+  "date": "2026-11-26",
+  "note": "Samples labelled by the compiled kernel, one thread (commit 'Label the samples with the compiled kernel when it is available.').",
+  "kernel": true,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   },
+   "areas native": {
+    "shape": [
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "sha256": "b6af787ee8dd9fa3d1e8815a7f9edfad5171bd77ba4614d23bf6ea423c5d51df"
+   }
+  },
+  "workloads": {
+   "single": {
+    "total": 27.699743084027432,
+    "peak_memory_gb": 5.741133824,
+    "kernel": true,
+    "steps": {
+     "surface": 10.553424666984938,
+     "partitions": 5.430068249930628,
+     "requests": [
+      11.711728041991591
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.764568625018001,
+     "dijkstra": 7.463893666979857,
+     "label_points": 4.83092191698961,
+     "label_samples": 9.602402456686832,
+     "entries": 11.617760249995627
+    },
+    "outputs": [
+     "native to onavg-ico32"
+    ],
+    "totals": [
+     27.699743084027432
+    ]
+   },
+   "batch_tt": {
+    "total": 54.91548208298627,
+    "peak_memory_gb": 6.125027328,
+    "kernel": true,
+    "steps": {
+     "surface": 10.453870874946006,
+     "partitions": 19.215298374998383,
+     "requests": [
+      25.23219820810482
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.768740167026408,
+     "dijkstra": 13.736828375025652,
+     "label_points": 13.518234749906696,
+     "label_samples": 17.57697706250474,
+     "entries": 24.912131041055545
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     54.91548208298627
+    ]
+   },
+   "separate_tt": {
+    "total": 78.86800037499052,
+    "peak_memory_gb": 6.278217728,
+    "kernel": true,
+    "steps": {
+     "surface": 10.218453707988374,
+     "partitions": 19.288796666893177,
+     "requests": [
+      11.613639250048436,
+      13.417901291977614,
+      13.881409832974896,
+      10.43447462504264
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.530503458110616,
+     "dijkstra": 13.758117499994114,
+     "label_points": 13.54183816688601,
+     "label_samples": 41.438046233030036,
+     "entries": 49.023255375097506
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     78.86800037499052
+    ]
+   },
+   "partial": {
+    "total": 67.25683712493628,
+    "peak_memory_gb": 6.307627008,
+    "kernel": true,
+    "steps": {
+     "surface": 10.258350999909453,
+     "partitions": 19.302542499965057,
+     "requests": [
+      16.795427625067532,
+      20.88706762494985
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.5703763329656795,
+     "dijkstra": 13.710715583176352,
+     "label_points": 13.493971541058272,
+     "label_samples": 30.16105960821733,
+     "entries": 37.356799082946964
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     67.25683712493628
+    ]
+   },
+   "areas": {
+    "total": 19.2441819999367,
+    "peak_memory_gb": 6.329040896,
+    "kernel": true,
+    "steps": {
+     "surface": 10.091139791999012,
+     "partitions": 1.2080417945981026e-06,
+     "requests": [
+      9.152229833998717
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.394808167009614,
+     "dijkstra": 3.6275775000685826,
+     "label_samples": 7.752468274207786,
+     "entries": 9.15049795806408
+    },
+    "outputs": [
+     "areas native"
+    ],
+    "totals": [
+     19.2441819999367
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-330-g0d1ea56",
+  "date": "2026-11-26",
+  "note": "Labels counted in the kernel, one thread (commit 'Count the labels of each face in the compiled kernel.').",
+  "kernel": true,
+  "n_jobs": 1,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   }
+  },
+  "workloads": {
+   "batch_tt": {
+    "total": 51.23554099991452,
+    "peak_memory_gb": 6.464864256,
+    "kernel": true,
+    "steps": {
+     "surface": 10.060387625009753,
+     "partitions": 19.229093040921725,
+     "requests": [
+      21.93260079191532
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.37457829201594,
+     "dijkstra": 13.74431299988646,
+     "label_points": 13.524985373951495,
+     "label_samples": 17.586185909458436,
+     "entries": 21.607906915945932
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     51.23554099991452
+    ]
+   },
+   "separate_tt": {
+    "total": 75.50984391698148,
+    "peak_memory_gb": 6.313918464,
+    "kernel": true,
+    "steps": {
+     "surface": 10.250702082994394,
+     "partitions": 19.308457334060222,
+     "requests": [
+      10.737399708013982,
+      12.150144417071715,
+      12.969287707936019,
+      10.080653417040594
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.508677374920808,
+     "dijkstra": 13.737297417828813,
+     "label_points": 13.462394166039303,
+     "label_samples": 41.65181496483274,
+     "entries": 45.613874333910644
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     75.50984391698148
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-330-g0d1ea56",
+  "date": "2026-11-26",
+  "note": "Labels counted in the kernel, eight threads (commit 'Count the labels of each face in the compiled kernel.').",
+  "kernel": true,
+  "n_jobs": 8,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   }
+  },
+  "workloads": {
+   "batch_tt": {
+    "total": 34.43625604198314,
+    "peak_memory_gb": 6.067011584,
+    "kernel": true,
+    "steps": {
+     "surface": 10.447302334010601,
+     "partitions": 19.349700167076662,
+     "requests": [
+      4.62525345897302
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.738454499980435,
+     "dijkstra": 13.792803583201021,
+     "label_points": 13.57932779204566,
+     "label_samples": 26.990689793834463,
+     "entries": 4.303547749994323
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     34.43625604198314
+    ]
+   },
+   "separate_tt": {
+    "total": 39.11648479208816,
+    "peak_memory_gb": 6.45619712,
+    "kernel": true,
+    "steps": {
+     "surface": 10.1212067080196,
+     "partitions": 19.26435645809397,
+     "requests": [
+      2.2180560829583555,
+      2.602966708014719,
+      2.7148212919710204,
+      2.1817814169917256
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 5.40968654199969,
+     "dijkstra": 13.798116209218279,
+     "label_points": 13.570014124852605,
+     "label_samples": 67.53554576821625,
+     "entries": 9.386911334004253
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     39.11648479208816
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-338-g8c46ec2",
+  "date": "2026-11-26",
+  "note": "Graph filled directly and partitions labelled without a copy of the graph, one thread (commit 'Label the points of a partition without copying the graph.').",
+  "kernel": true,
+  "n_jobs": 1,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   },
+   "areas native": {
+    "shape": [
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "sha256": "b6af787ee8dd9fa3d1e8815a7f9edfad5171bd77ba4614d23bf6ea423c5d51df"
+   }
+  },
+  "workloads": {
+   "single": {
+    "total": 25.369846749934368,
+    "peak_memory_gb": 2.95215104,
+    "kernel": true,
+    "steps": {
+     "surface": 9.442041166010313,
+     "partitions": 5.273687709006481,
+     "requests": [
+      10.649668666999787
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.721507375012152,
+     "dijkstra": 7.2781105829635635,
+     "label_points": 4.658137375023216,
+     "label_samples": 9.607719353283755,
+     "entries": 10.553539791959338
+    },
+    "outputs": [
+     "native to onavg-ico32"
+    ],
+    "totals": [
+     25.369846749934368
+    ]
+   },
+   "batch": {
+    "total": 49.10067304200493,
+    "peak_memory_gb": 3.254403072,
+    "kernel": true,
+    "steps": {
+     "surface": 9.535641334019601,
+     "partitions": 18.669156083022244,
+     "requests": [
+      20.883965375018306
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.75976337492466,
+     "dijkstra": 13.221769415889867,
+     "label_points": 12.908137666992843,
+     "label_samples": 17.545547226793133,
+     "entries": 20.608251583063975
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128"
+    ],
+    "totals": [
+     49.10067304200493
+    ]
+   },
+   "separate": {
+    "total": 64.01098508294672,
+    "peak_memory_gb": 3.153231872,
+    "kernel": true,
+    "steps": {
+     "surface": 9.660621916991659,
+     "partitions": 18.743168624932878,
+     "requests": [
+      10.484468916081823,
+      12.188746875035577,
+      12.92125441704411
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.741790083004162,
+     "dijkstra": 13.431460707914084,
+     "label_points": 12.99958516692277,
+     "label_samples": 32.807003853842616,
+     "entries": 35.31809158390388
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128"
+    ],
+    "totals": [
+     64.01098508294672
+    ]
+   },
+   "batch_tt": {
+    "total": 49.75009612494614,
+    "peak_memory_gb": 3.312648192,
+    "kernel": true,
+    "steps": {
+     "surface": 9.485989667009562,
+     "partitions": 18.810186791000888,
+     "requests": [
+      21.440597041975707
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.724257208057679,
+     "dijkstra": 13.364913790952414,
+     "label_points": 13.041899457923137,
+     "label_samples": 17.556896919268183,
+     "entries": 21.11406812502537
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     49.75009612494614
+    ]
+   },
+   "separate_tt": {
+    "total": 75.0566916250391,
+    "peak_memory_gb": 3.162095616,
+    "kernel": true,
+    "steps": {
+     "surface": 9.54305275005754,
+     "partitions": 18.62977250001859,
+     "requests": [
+      10.879114207928069,
+      12.372168792062439,
+      13.37051608308684,
+      10.248605916043743
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.742441374924965,
+     "dijkstra": 13.33136233210098,
+     "label_points": 12.918705998803489,
+     "label_samples": 41.66562575590797,
+     "entries": 46.54363450082019
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     75.0566916250391
+    ]
+   },
+   "partial": {
+    "total": 61.792385792010464,
+    "peak_memory_gb": 3.15916288,
+    "kernel": true,
+    "steps": {
+     "surface": 9.40052262507379,
+     "partitions": 18.666461874963716,
+     "requests": [
+      14.385999209014699,
+      19.326131833950058
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.707433875068091,
+     "dijkstra": 13.189033124013804,
+     "label_points": 12.901685249991715,
+     "label_samples": 29.944909459445626,
+     "entries": 33.388419166905805
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     61.792385792010464
+    ]
+   },
+   "areas": {
+    "total": 18.863551583024673,
+    "peak_memory_gb": 2.888810496,
+    "kernel": true,
+    "steps": {
+     "surface": 9.427192083094269,
+     "partitions": 1.208973117172718e-06,
+     "requests": [
+      9.43561408307869
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.743879999965429,
+     "dijkstra": 3.6360995420254767,
+     "label_samples": 7.7868652229662985,
+     "entries": 9.433938583009876
+    },
+    "outputs": [
+     "areas native"
+    ],
+    "totals": [
+     18.863551583024673
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-338-g8c46ec2",
+  "date": "2026-11-26",
+  "note": "The same commit, eight threads.",
+  "kernel": true,
+  "n_jobs": 8,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   },
+   "areas native": {
+    "shape": [
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "sha256": "b6af787ee8dd9fa3d1e8815a7f9edfad5171bd77ba4614d23bf6ea423c5d51df"
+   }
+  },
+  "workloads": {
+   "single": {
+    "total": 16.909444999997504,
+    "peak_memory_gb": 3.012870144,
+    "kernel": true,
+    "steps": {
+     "surface": 9.43019554100465,
+     "partitions": 5.239485166966915,
+     "requests": [
+      2.234963707975112
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.72545266605448,
+     "dijkstra": 7.269173749955371,
+     "label_points": 4.629444084013812,
+     "label_samples": 15.042762022232637,
+     "entries": 2.1399695409927517
+    },
+    "outputs": [
+     "native to onavg-ico32"
+    ],
+    "totals": [
+     16.909444999997504
+    ]
+   },
+   "batch": {
+    "total": 32.7015574160032,
+    "peak_memory_gb": 3.211968512,
+    "kernel": true,
+    "steps": {
+     "surface": 9.56159125000704,
+     "partitions": 18.71002887492068,
+     "requests": [
+      4.41764391597826
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.7356026250636205,
+     "dijkstra": 13.375068706809543,
+     "label_points": 12.997685958980583,
+     "label_samples": 27.06952999101486,
+     "entries": 4.140610542031936
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128"
+    ],
+    "totals": [
+     32.7015574160032
+    ]
+   },
+   "separate": {
+    "total": 35.87359841703437,
+    "peak_memory_gb": 3.15547648,
+    "kernel": true,
+    "steps": {
+     "surface": 9.408760374994017,
+     "partitions": 18.718663166975603,
+     "requests": [
+      2.2478833330096677,
+      2.6754003330133855,
+      2.810265584033914
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.714545416994952,
+     "dijkstra": 13.25182399910409,
+     "label_points": 12.987001124885865,
+     "label_samples": 53.26932942098938,
+     "entries": 7.453777416958474
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128"
+    ],
+    "totals": [
+     35.87359841703437
+    ]
+   },
+   "batch_tt": {
+    "total": 33.932338375016116,
+    "peak_memory_gb": 3.288498176,
+    "kernel": true,
+    "steps": {
+     "surface": 9.437070209067315,
+     "partitions": 18.682605165988207,
+     "requests": [
+      5.7995890830643475
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.69922479102388,
+     "dijkstra": 13.243279583170079,
+     "label_points": 12.962964333943091,
+     "label_samples": 31.65835234185215,
+     "entries": 5.471760291955434
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     33.932338375016116
+    ]
+   },
+   "separate_tt": {
+    "total": 38.102868249989115,
+    "peak_memory_gb": 3.218325504,
+    "kernel": true,
+    "steps": {
+     "surface": 9.432575791957788,
+     "partitions": 18.753684459021315,
+     "requests": [
+      2.2898157499730587,
+      2.658233040943742,
+      2.757143291993998,
+      2.1913791249971837
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.718395999982022,
+     "dijkstra": 13.233690457884222,
+     "label_points": 12.950411624042317,
+     "label_samples": 68.17571990785655,
+     "entries": 9.55680799903348
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     38.102868249989115
+    ]
+   },
+   "partial": {
+    "total": 35.51627283298876,
+    "peak_memory_gb": 3.148251136,
+    "kernel": true,
+    "steps": {
+     "surface": 9.430511957965791,
+     "partitions": 18.72521433304064,
+     "requests": [
+      3.1866144579835236,
+      4.160421208944172
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.7250969579909,
+     "dijkstra": 13.280118626193143,
+     "label_points": 12.988569374894723,
+     "label_samples": 48.64220134646166,
+     "entries": 7.020244208164513
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     35.51627283298876
+    ]
+   },
+   "areas": {
+    "total": 11.304445165907964,
+    "peak_memory_gb": 2.846900224,
+    "kernel": true,
+    "steps": {
+     "surface": 9.515597374993376,
+     "partitions": 1.166015863418579e-06,
+     "requests": [
+      1.7879694160073996
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.695472040912136,
+     "dijkstra": 3.7785249579465017,
+     "label_samples": 12.634282824350521,
+     "entries": 1.7861755839549005
+    },
+    "outputs": [
+     "areas native"
+    ],
+    "totals": [
+     11.304445165907964
+    ]
+   }
+  }
+ },
+ {
+  "source": "v0.1.5-338-g8c46ec2",
+  "date": "2026-11-26",
+  "note": "The same commit without the compiled kernel.",
+  "kernel": false,
+  "n_jobs": 1,
+  "environment": {
+   "python": "3.12.7",
+   "numpy": "2.2.6",
+   "scipy": "1.16.0",
+   "platform": "macOS-27.2.1-arm64-arm-64bit",
+   "machine": "arm64",
+   "byteorder": "little"
+  },
+  "native": "onavg-ico128",
+  "templates": [
+   "onavg-ico32",
+   "onavg-ico64",
+   "onavg-ico128"
+  ],
+  "inputs": {
+   "onavg-ico128/midthickness": "a94b28fc32a56840d0b316e1b2aab4238787247a4e83b0eabfdd335b39e40599",
+   "onavg-ico128/faces": "d07d4e1b7d388a325a75cae7e2e708fcf4cc592b7078c14fb8f146f663068813",
+   "onavg-ico128/sphere.reg": "c406d6633b212a80369b0ec05fdd1ad06a42405bbed61558cdf9d061a055973c",
+   "onavg-ico32/sphere.reg": "4dc77551c958900980127d004b1cc9c72eaf97327365bf0826a38cefe6b5289e",
+   "onavg-ico64/sphere.reg": "783b57734e9e0740963840b2d8a9b7184e66d72e2e4c8af97b8635baf17a63fc"
+  },
+  "outputs": {
+   "native to onavg-ico32": {
+    "shape": [
+     163842,
+     10242
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 265921,
+    "sha256": "6556d74e4a71e1766d792c199589f0c270f1ea8496af4472888744572665ebb6"
+   },
+   "native to onavg-ico64": {
+    "shape": [
+     163842,
+     40962
+    ],
+    "sum": 57290.01148866802,
+    "nnz": 387471,
+    "sha256": "45e9f2c04aa1ec1da9a1b8edb74577eb2331408029c35ff5856c43bd8959bc63"
+   },
+   "native to onavg-ico128": {
+    "shape": [
+     163842,
+     163842
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 163842,
+    "sha256": "206d58ed4fec40009419882a1ea478e4c75c441c32f523406ab5b40d44667ca1"
+   },
+   "onavg-ico32 to onavg-ico64": {
+    "shape": [
+     10242,
+     40962
+    ],
+    "sum": 57290.011488668024,
+    "nnz": 97588,
+    "sha256": "1ae14f03de1e56873646b1d30e0933d8752459d34ac1f176003d3739eed3757c"
+   }
+  },
+  "workloads": {
+   "batch_tt": {
+    "total": 124.66010887501761,
+    "peak_memory_gb": 3.224223744,
+    "kernel": false,
+    "steps": {
+     "surface": 9.461617334047332,
+     "partitions": 18.720614499994554,
+     "requests": [
+      96.46468866604846
+     ]
+    },
+    "stages": {
+     "subdivided_graph": 4.74706383398734,
+     "dijkstra": 13.238543500890955,
+     "label_points": 12.965149042895064,
+     "boundary_distances": 24.689111012383364,
+     "local_labels": 48.181181320687756,
+     "decode": 8.794270784943365,
+     "entries": 96.14221562503371
+    },
+    "outputs": [
+     "native to onavg-ico32",
+     "native to onavg-ico64",
+     "native to onavg-ico128",
+     "onavg-ico32 to onavg-ico64"
+    ],
+    "totals": [
+     124.66010887501761
+    ]
+   }
+  }
+ }
+]
