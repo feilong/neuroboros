@@ -941,7 +941,10 @@ class VoronoiSurface:
         return labels
 
     def _label_vertices(self):
-        """Label the graph nodes with the nearest mesh vertex."""
+        """Label the graph nodes with the nearest mesh vertex.
+
+        The lowest vertex index wins an exact tie (``_lowest_labels``).
+        """
         nnd, _, nn = dijkstra(
             self._graph,
             indices=np.unique(self.faces),
@@ -949,6 +952,7 @@ class VoronoiSurface:
             min_only=True,
         )
         nn = np.where(nn >= 0, nn, -1).astype(np.int32)
+        nn = _lowest_labels(self._graph, nnd, nn)
         return _PointSet(
             size=len(self.coords),
             nn=nn,
@@ -962,7 +966,8 @@ class VoronoiSurface:
         """Label the graph nodes with the nearest point of a point set.
 
         Each point becomes an extra node with one-way connections to the
-        boundary nodes of its face, as in ``subdivision_voronoi``.
+        boundary nodes of its face, as in ``subdivision_voronoi``. The lowest
+        point index wins an exact tie (``_lowest_labels``).
         """
         n_nodes, n = len(self._node_coords), len(f_indices)
         # The batched matmul rounds like ``weights[i] @ coords[faces[f]]``.
@@ -998,13 +1003,16 @@ class VoronoiSurface:
         )
         del graph
         nn = np.where(sources[:n_nodes] >= 0, sources[:n_nodes] - n_nodes, -1)
+        nn = _lowest_labels(
+            self._graph, dists[:n_nodes], nn.astype(np.int32), boundary, distances
+        )
 
         # The points inside each face, in increasing index.
         order = np.argsort(f_indices, kind="stable")
         counts = np.bincount(f_indices, minlength=len(self.faces))
         return _PointSet(
             size=n,
-            nn=nn.astype(np.int32),
+            nn=nn,
             nnd=dists[:n_nodes],
             inside_ptr=np.concatenate([[0], np.cumsum(counts)]),
             inside_labels=order.astype(np.int32),
@@ -1169,6 +1177,59 @@ class _PointSet:
         for value in vars(self).values():
             if isinstance(value, np.ndarray):
                 value.flags.writeable = False
+
+
+def _lowest_labels(graph, distances, labels, point_nodes=None, point_distances=None):
+    """Give every node the lowest label that reaches it at its distance.
+
+    ``distances`` and ``labels`` come from a multi-source Dijkstra on
+    ``graph``: the distance of each node from the nearest source, and one
+    source at that distance. When several sources are at that distance, SciPy
+    does not specify which one it returns, and its choice depends on the
+    order of the entries of the graph.
+
+    A connection from ``u`` to ``v`` of length ``w`` is on a shortest path if
+    ``distances[u] + w == distances[v]``. In the returned labels, each node
+    has the lowest label of the nodes that connect to it in this way, and a
+    source that is a node of the graph has its own index unless a lower
+    source is at distance zero. These labels depend only on the distances,
+    which do not depend on any order.
+
+    For sources that are not nodes of the graph, ``point_nodes[i]`` and
+    ``point_distances[i]`` give the nodes that source ``i`` is connected to
+    and the lengths of those connections. Unreachable nodes keep -1.
+    """
+    labels = labels.copy()
+    if graph.shape[0] == 0:
+        return labels
+    if point_nodes is not None:
+        is_tight = point_distances == distances[point_nodes]
+        points = np.arange(len(point_nodes), dtype=labels.dtype)[:, np.newaxis]
+        points = np.broadcast_to(points, point_nodes.shape)
+        np.minimum.at(labels, point_nodes[is_tight], points[is_tight])
+
+    # Find the connections on shortest paths, for a block of rows at a time
+    # to limit the size of the temporary arrays.
+    tails, heads = [], []
+    n_nodes, indptr, block = graph.shape[0], graph.indptr, 2**16
+    for start in range(0, n_nodes, block):
+        stop = min(start + block, n_nodes)
+        entries = slice(indptr[start], indptr[stop])
+        u = np.repeat(np.arange(start, stop), np.diff(indptr[start : stop + 1]))
+        v = graph.indices[entries]
+        is_tight = distances[u] + graph.data[entries] == distances[v]
+        # Unreachable nodes are at an infinite distance from each other.
+        is_tight &= labels[v] >= 0
+        tails.append(u[is_tight])
+        heads.append(v[is_tight])
+    tails, heads = np.concatenate(tails), np.concatenate(heads)
+
+    # Pass the lowest label along those connections until nothing changes.
+    while True:
+        is_lower = labels[tails] < labels[heads]
+        if not is_lower.any():
+            return labels
+        np.minimum.at(labels, heads[is_lower], labels[tails[is_lower]])
 
 
 def _finite_copy(x, name):

@@ -19,6 +19,7 @@ from .properties import (
 from .subdivision import surface_subdivision
 from .union import compute_union_sphere
 from .voronoi import (
+    VoronoiPartition,
     VoronoiSurface,
     compute_occupation,
     native_voronoi,

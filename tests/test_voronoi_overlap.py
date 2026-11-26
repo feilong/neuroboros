@@ -3,7 +3,9 @@ import weakref
 
 import numpy as np
 import pytest
+import scipy.sparse as sparse
 import voronoi_reference as reference
+from scipy.sparse import csgraph
 from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi
@@ -137,6 +139,41 @@ def _old_inputs(surface):
     return surface._node_coords, surface.faces, e_mapping, graph
 
 
+def _point_connections(surface, partition):
+    """The boundary nodes that each point is connected to, and the lengths."""
+    point_set = partition._point_set
+    f_indices = np.repeat(np.arange(len(surface.faces)), np.diff(point_set.inside_ptr))
+    nodes = np.empty((point_set.size, surface._face_nodes.shape[1]), dtype=int)
+    nodes[point_set.inside_labels] = surface._face_nodes[f_indices]
+    positions = np.empty((point_set.size, 3))
+    positions[point_set.inside_labels] = point_set.inside_coords
+    diff = positions[:, np.newaxis] - surface._node_coords[nodes]
+    return nodes, np.sqrt(np.sum(diff**2, axis=2))
+
+
+def _lowest_labels(graph, distances, labels, point_nodes=(), point_distances=()):
+    """The tie rule of ``voronoi._lowest_labels``, one connection at a time."""
+    graph, labels = graph.tocoo(), labels.copy()
+    connections = [
+        (None, v, w, p)
+        for p, (nodes, lengths) in enumerate(zip(point_nodes, point_distances))
+        for v, w in zip(nodes, lengths)
+    ]
+    connections += [
+        (u, v, w, None) for u, v, w in zip(graph.row, graph.col, graph.data)
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for u, v, w, label in connections:
+            start = 0.0 if u is None else distances[u]
+            label = labels[u] if label is None else label
+            if start + w == distances[v] and -1 < label < labels[v]:
+                labels[v] = label
+                changed = True
+    return labels
+
+
 @pytest.mark.parametrize("n_div", [1, 2, 8])
 def test_native_labels(mesh, n_div):
     coords, faces, _ = mesh
@@ -145,7 +182,8 @@ def test_native_labels(mesh, n_div):
     point_set = surface.native._point_set
     nn, nnd = reference.native_voronoi(*_old_inputs(surface))
     assert point_set.nn.dtype == np.int32
-    np.testing.assert_array_equal(point_set.nn, nn)
+    # SciPy's distances, and the lowest index where SciPy had a choice.
+    np.testing.assert_array_equal(point_set.nn, _lowest_labels(surface._graph, nnd, nn))
     np.testing.assert_array_equal(point_set.nnd, nnd)
     assert point_set.size == len(coords)
     np.testing.assert_array_equal(point_set.inside_ptr, np.zeros(len(faces) + 1))
@@ -157,14 +195,18 @@ def test_native_labels(mesh, n_div):
 def test_partition_labels(mesh, points, n_div):
     coords, faces, sphere = mesh
     surface = VoronoiSurface(coords, faces, sphere, edge_divisions=n_div)
-    point_set = surface.partition(points)._point_set
+    partition = surface.partition(points)
+    point_set = partition._point_set
     f_indices, weights = Sphere(sphere, faces).barycentric(
         points, eps=1e-7, return_sparse=False
     )
     assert len(np.unique(f_indices)) < len(points)
     nn, nnd = reference.subdivision_voronoi(*_old_inputs(surface), f_indices, weights)
     assert point_set.nn.dtype == np.int32
-    np.testing.assert_array_equal(point_set.nn, nn)
+    expected = _lowest_labels(
+        surface._graph, nnd, nn, *_point_connections(surface, partition)
+    )
+    np.testing.assert_array_equal(point_set.nn, expected)
     np.testing.assert_array_equal(point_set.nnd, nnd)
     assert point_set.size == len(points)
 
@@ -247,6 +289,138 @@ def test_partition_requires_sphere(mesh, points):
         surface.partition(points)
 
 
+@pytest.fixture
+def square():
+    """A flat unit square of two faces, where many distances tie exactly."""
+    coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
+    return coords, np.array([[0, 1, 2], [1, 3, 2]])
+
+
+def _node_at(surface, xy):
+    """The index of the graph node at a position of the unit square."""
+    (node,) = np.flatnonzero(np.all(surface._node_coords[:, :2] == xy, axis=1))
+    return node
+
+
+@pytest.mark.parametrize("n_div", [2, 4, 8])
+def test_lowest_index_wins_ties(square, n_div):
+    coords, faces = square
+    surface = VoronoiSurface(coords, faces, edge_divisions=n_div)
+    labels = surface.native._point_set.nn
+    # The middle of an edge is as far from both ends, and the center of the
+    # square from all four vertices.
+    for a, b in [(0, 1), (0, 2), (1, 3), (2, 3)]:
+        assert labels[_node_at(surface, (coords[a, :2] + coords[b, :2]) / 2)] == a
+    assert labels[_node_at(surface, (0.5, 0.5))] == 0
+
+    # Two points mirrored across the line y = x. The nodes on that line are
+    # as far from both points, and the second face is reached through one of
+    # them, the center of the square.
+    weights = np.array([[0.4, 0.4, 0.2], [0.4, 0.2, 0.4]])
+    tied = [_node_at(surface, xy) for xy in [(0, 0), (0.5, 0.5), (1, 1)]]
+    areas = []
+    for order in ([0, 1], [1, 0]):
+        partition = surface.partition(face_indices=[0, 0], weights=weights[order])
+        np.testing.assert_array_equal(partition._point_set.nn[tied], 0)
+        areas.append(partition.areas())
+    # The first point takes the tied part, whichever of the two it is.
+    assert areas[0][0] > 0.5 > areas[0][1]
+    np.testing.assert_allclose(areas[0], areas[1], atol=0.01)
+
+
+def _raw_labels(surface, partition=None, graph=None):
+    """SciPy's distances and labels for a partition, before the tie rule."""
+    n_nodes = len(surface._node_coords)
+    graph = surface._graph if graph is None else graph
+    sources = np.unique(surface.faces)
+    if partition is not None:
+        nodes, lengths = _point_connections(surface, partition)
+        n = len(nodes)
+        indptr = np.arange(0, nodes.size + 1, nodes.shape[1])
+        point_rows = sparse.csr_matrix(
+            (lengths.ravel(), nodes.ravel(), indptr), shape=(n, n_nodes + n)
+        )
+        mesh_rows = sparse.csr_matrix(
+            (graph.data, graph.indices, graph.indptr), shape=(n_nodes, n_nodes + n)
+        )
+        graph = sparse.vstack([mesh_rows, point_rows], format="csr")
+        sources = np.arange(n_nodes, n_nodes + n)
+    distances, _, labels = csgraph.dijkstra(
+        graph, indices=sources, return_predecessors=True, min_only=True
+    )
+    if partition is not None:
+        labels = np.where(labels >= 0, labels - n_nodes, -1)
+    return distances[:n_nodes], labels[:n_nodes].astype(np.int32)
+
+
+@pytest.mark.parametrize("n_div", [1, 2, 4])
+@pytest.mark.parametrize("flat", [True, False])
+def test_labels_do_not_depend_on_scipy(mesh, square, n_div, flat):
+    """Not on which tied source SciPy returns, and not on the order of the
+    entries of the graph."""
+    coords, faces = square if flat else mesh[:2]
+    surface = VoronoiSurface(coords, faces, edge_divisions=n_div)
+    rng = np.random.default_rng(0)
+    f_indices = rng.integers(0, len(faces), 12)
+    weights = rng.dirichlet(np.ones(3), 12)
+    if flat:
+        # Points on vertices, edges and the diagonal, some of them twice.
+        weights = rng.choice([0, 0.25, 0.5], (12, 3))
+        weights[:, 2] = 1 - weights[:, :2].sum(axis=1)
+    points = surface.partition(face_indices=f_indices, weights=weights)
+
+    graph = surface._graph
+    n_ties = 0
+    for partition, connections in [
+        (None, ()),
+        (points, _point_connections(surface, points)),
+    ]:
+        point_set = (partition or surface.native)._point_set
+        distances, labels = _raw_labels(surface, partition)
+        np.testing.assert_array_equal(point_set.nnd, distances)
+        np.testing.assert_array_equal(
+            point_set.nn, _lowest_labels(graph, distances, labels, *connections)
+        )
+        # Any other valid choice gives the same labels. The highest tied
+        # source is the lowest one with the labels in reverse order.
+        n = point_set.size
+        reversed_labels = voronoi._lowest_labels(
+            graph, distances, n - 1 - labels, *[x[::-1] for x in connections]
+        )
+        highest = n - 1 - reversed_labels
+        n_ties += np.count_nonzero(highest != point_set.nn)
+        resolved = voronoi._lowest_labels(graph, distances, highest, *connections)
+        np.testing.assert_array_equal(resolved, point_set.nn)
+
+        # The same graph with the entries of each row in another order.
+        shuffled = graph.copy()
+        for start, stop in zip(shuffled.indptr[:-1], shuffled.indptr[1:]):
+            order = start + rng.permutation(stop - start)
+            shuffled.indices[start:stop] = graph.indices[order]
+            shuffled.data[start:stop] = graph.data[order]
+        distances2, labels2 = _raw_labels(surface, partition, shuffled)
+        np.testing.assert_array_equal(distances2, distances)
+        resolved = voronoi._lowest_labels(shuffled, distances2, labels2, *connections)
+        np.testing.assert_array_equal(resolved, point_set.nn)
+    if n_div > 1:
+        assert n_ties > 0
+
+
+def test_lowest_labels_unreachable(mesh):
+    coords, faces, _ = mesh
+    # A second copy of the mesh, not connected to the first.
+    surface = VoronoiSurface(
+        np.concatenate([coords, coords + 10]),
+        np.concatenate([faces, faces + len(coords)]),
+        edge_divisions=2,
+    )
+    point_set = surface._label_points(np.array([0, 3]), np.full((2, 3), 1 / 3))
+    n_reached = np.count_nonzero(point_set.nn >= 0)
+    assert 0 < n_reached < len(point_set.nn)
+    np.testing.assert_array_equal(np.isfinite(point_set.nnd), point_set.nn >= 0)
+    np.testing.assert_array_equal(np.unique(point_set.nn), [-1, 0, 1])
+
+
 def _expected_samples(partition, f_indices=None, weights=None):
     """The sample labels of every face from compute_occupation."""
     surface, point_set = partition.surface, partition._point_set
@@ -319,10 +493,9 @@ def test_sample_labels(mesh, n_div, t_div, n_points):
 
 @pytest.mark.parametrize("n_div", [1, 2, 4])
 @pytest.mark.parametrize("t_div", [2, 4])
-def test_sample_labels_ties(n_div, t_div):
+def test_sample_labels_ties(square, n_div, t_div):
     """A flat, symmetric mesh where many scores tie exactly."""
-    coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
-    faces = np.array([[0, 1, 2], [1, 3, 2]])
+    coords, faces = square
     surface = VoronoiSurface(
         coords, faces, edge_divisions=n_div, sample_divisions=t_div
     )
@@ -636,6 +809,17 @@ def test_unreachable_faces(mesh):
         surface.partition(face_indices=[0], weights=weights)
     both = surface.partition(face_indices=[0, len(faces)], weights=weights * 2)
     np.testing.assert_allclose(both.areas(), surface.face_areas.sum() / 2)
+
+
+def test_empty_surface():
+    """An empty mesh has no cell areas or overlaps."""
+    surface = VoronoiSurface(np.empty((0, 3)), np.empty((0, 3), dtype=int))
+    native = surface.native
+    assert native.n_cells == 0
+    assert native.areas().shape == (0,)
+    overlap = native.overlap(native)
+    assert overlap.shape == (0, 0)
+    assert overlap.nnz == 0
 
 
 def test_vertex_without_face(mesh):
