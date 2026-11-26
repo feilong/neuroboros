@@ -1,4 +1,6 @@
 import functools
+import importlib
+import os
 import warnings
 import weakref
 from dataclasses import dataclass
@@ -1175,6 +1177,36 @@ class _PointSet:
         for value in vars(self).values():
             if isinstance(value, np.ndarray):
                 value.flags.writeable = False
+
+
+def _load_kernel():
+    """Return the compiled kernel, or None to compute with NumPy.
+
+    The kernel is optional. It may not be built, and setting the environment
+    variable ``NEUROBOROS_VORONOI_KERNEL`` to ``0`` turns it off. It is also
+    refused if it was compiled with fused multiply-add, because its results
+    would then differ from NumPy's in the last bits.
+    """
+    if os.environ.get("NEUROBOROS_VORONOI_KERNEL") == "0":
+        return None
+    try:
+        kernel = importlib.import_module("._voronoi_kernel", __package__)
+    except ImportError:
+        return None
+    # The exact product is 1 + 2**-26 + 2**-54. Its last term is lost when
+    # the product is rounded, and kept by a fused multiply-add.
+    a = 1.0 + 2.0**-27
+    if kernel.multiply_add(a, a, -1.0) != 2.0**-26:
+        warnings.warn(
+            "The compiled Voronoi kernel was built with fused multiply-add "
+            "and is not used. Build it with -ffp-contract=off.",
+            RuntimeWarning,
+        )
+        return None
+    return kernel
+
+
+_kernel = _load_kernel()
 
 
 def _barycentric_points(weights, corners):
