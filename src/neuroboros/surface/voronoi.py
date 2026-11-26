@@ -1,6 +1,7 @@
 import functools
 import importlib
 import os
+import threading
 import warnings
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -57,8 +58,11 @@ def _connection_distances(coords, rows, cols):
     return distances
 
 
-def _subdivided_graph(coords, faces, n_div):
+def _subdivided_graph(coords, faces, n_div, spare_row=False):
     """Subdivide each edge into ``n_div`` parts and build the distance graph.
+
+    With ``spare_row``, the arrays of the graph have room for one more row
+    (see ``_filled_graph``).
 
     Returns
     -------
@@ -97,7 +101,7 @@ def _subdivided_graph(coords, faces, n_div):
     if np.any(faces == faces[:, [1, 2, 0]]):
         neighbors = _listed_graph(*args)
     else:
-        neighbors = _filled_graph(*args)
+        neighbors = _filled_graph(*args, spare_row=spare_row)
     return edges, face_edge_ids, edge_points, new_coords, neighbors
 
 
@@ -169,7 +173,9 @@ def _ranks(keys, n):
     return ranks, counts
 
 
-def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
+def _filled_graph(
+    coords, new_coords, faces, edges, face_edge_ids, edge_points, spare_row=False
+):
     """Build the distance graph of ``_subdivided_graph`` in CSR form directly.
 
     The arguments are the vertices and faces of the mesh and the other
@@ -177,6 +183,10 @@ def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
     lengths as that of ``_listed_graph``, and its indices are sorted, so the
     three arrays of the two graphs are equal. Here every connection is
     written to its place in the final arrays, without lists of connections.
+
+    With ``spare_row``, ``indices`` and ``data`` are views of arrays that are
+    longer by one element for each node. One more row, with a connection to
+    any node, can then be added to the graph without copying it.
 
     No face may have the same vertex twice.
     """
@@ -209,8 +219,9 @@ def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
     indptr = np.concatenate([[0], np.cumsum(degrees)])
     nnz = indptr[-1]
     index_dtype = np.int32 if max(n_nodes, nnz) <= np.iinfo(np.int32).max else np.int64
-    indices = np.empty(nnz, dtype=index_dtype)
-    data = np.empty(nnz)
+    n_spare = n_nodes if spare_row else 0
+    indices = np.empty(nnz + n_spare, dtype=index_dtype)
+    data = np.empty(nnz + n_spare)
 
     def fill(places, columns, lengths):
         indices[places.ravel()] = np.broadcast_to(columns, places.shape).ravel()
@@ -258,7 +269,8 @@ def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
         fill(places, first, lengths)
 
     graph = sparse.csr_matrix(
-        (data, indices, indptr.astype(index_dtype)), shape=(n_nodes, n_nodes)
+        (data[:nnz], indices[:nnz], indptr.astype(index_dtype)),
+        shape=(n_nodes, n_nodes),
     )
     graph.sort_indices()
     return graph
@@ -765,10 +777,12 @@ class VoronoiSurface:
         self._ww = _split_triangle(self.sample_divisions)
 
         _, face_edge_ids, edge_points, new_coords, graph = _subdivided_graph(
-            coords, faces, self.edge_divisions
+            coords, faces, self.edge_divisions, spare_row=True
         )
         self._node_coords = np.concatenate([coords, new_coords])
         self._graph = graph
+        # Held while the spare row of the graph is in use.
+        self._source_lock = threading.Lock()
         self._face_nodes = _face_nodes(faces, face_edge_ids, edge_points)
         self._native = None
         self._native_partition = None
@@ -790,10 +804,12 @@ class VoronoiSurface:
         # A weak reference cannot be pickled, and the object that places
         # points on the sphere is built again when it is needed.
         state["_native_partition"] = state["_placement"] = None
+        del state["_source_lock"]
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        self._source_lock = threading.Lock()
         # Pickling does not keep arrays read-only.
         self._freeze()
 
@@ -1223,8 +1239,8 @@ class VoronoiSurface:
     def _label_points(self, f_indices, weights):
         """Label the graph nodes with the nearest point of a point set.
 
-        Each point becomes an extra node with one-way connections to the
-        boundary nodes of its face, as in ``subdivision_voronoi``. The lowest
+        A point is connected to the boundary nodes of its face, and paths do
+        not pass through points, as in ``subdivision_voronoi``. The lowest
         point index wins an exact tie (``_lowest_labels``).
         """
         n_nodes, n = len(self._node_coords), len(f_indices)
@@ -1235,33 +1251,45 @@ class VoronoiSurface:
         distances = np.sqrt(np.sum(diff**2, axis=2))
         del diff
 
-        # Connections point out of the point nodes only, so paths cannot use
-        # a point node as a shortcut through a face.
-        graph = self._graph
-        mesh_rows = sparse.csr_matrix(
-            (graph.data, graph.indices, graph.indptr), shape=(n_nodes, n_nodes + n)
+        # One more node, the source, stands for all points. It is connected
+        # to each node next to a point, at the distance of the nearest such
+        # point, so the distances from it are the distances from the nearest
+        # point. Its connections point away from it, so no path uses it as a
+        # shortcut.
+        first = np.full(n_nodes, np.inf)
+        np.minimum.at(first, boundary, distances)
+        next_to_point = np.flatnonzero(first < np.inf)
+        with self._source_lock:
+            graph = self._graph_with_source(next_to_point, first[next_to_point])
+            dists, predecessors = dijkstra(
+                graph, indices=n_nodes, return_predecessors=True
+            )
+            del graph
+        dists, predecessors = dists[:n_nodes], predecessors[:n_nodes]
+        del first
+
+        # Labels to start from. A node that the source reaches directly has
+        # the lowest point at its distance. Any other node has the label of
+        # the first node of its path, which is found by following the
+        # predecessors, in steps that double in length.
+        points = np.arange(n, dtype=np.int32)[:, np.newaxis]
+        is_tight = distances == dists[boundary]
+        nn = np.full(n_nodes, n, dtype=np.int32)
+        np.minimum.at(
+            nn, boundary[is_tight], np.broadcast_to(points, boundary.shape)[is_tight]
         )
-        point_rows = sparse.csr_matrix(
-            (
-                distances.ravel(),
-                boundary.ravel(),
-                np.arange(0, boundary.size + 1, boundary.shape[1]),
-            ),
-            shape=(n, n_nodes + n),
-        )
-        graph = sparse.vstack([mesh_rows, point_rows], format="csr")
-        del mesh_rows, point_rows
-        dists, _, sources = dijkstra(
-            graph,
-            indices=np.arange(n_nodes, n_nodes + n),
-            return_predecessors=True,
-            min_only=True,
-        )
-        del graph
-        nn = np.where(sources[:n_nodes] >= 0, sources[:n_nodes] - n_nodes, -1)
-        nn = _lowest_labels(
-            self._graph, dists[:n_nodes], nn.astype(np.int32), boundary, distances
-        )
+        nodes = np.arange(n_nodes)
+        is_first = predecessors == n_nodes
+        is_unreachable = predecessors < 0
+        first_node = np.where(is_first | is_unreachable, nodes, predecessors)
+        while True:
+            further = first_node[first_node]
+            if np.array_equal(further, first_node):
+                break
+            first_node = further
+        nn = nn[first_node]
+        nn[is_unreachable] = -1
+        nn = _lowest_labels(self._graph, dists, nn, boundary, distances)
 
         # The points inside each face, in increasing index.
         order = np.argsort(f_indices, kind="stable")
@@ -1269,10 +1297,43 @@ class VoronoiSurface:
         return _PointSet(
             size=n,
             nn=nn,
-            nnd=dists[:n_nodes],
+            nnd=dists,
             inside_ptr=np.concatenate([[0], np.cumsum(counts)]),
             inside_labels=order.astype(np.int32),
             inside_coords=positions[order],
+        )
+
+    def _graph_with_source(self, nodes, lengths):
+        """Return the graph with one more node, connected to ``nodes``.
+
+        The new node is the last one. Its row is written in the room after
+        the arrays of the graph, so the caller must hold ``_source_lock``
+        while it uses the result. Without that room, the arrays are copied.
+        """
+        graph = self._graph
+        n_nodes, nnz = graph.shape[0], graph.nnz
+        stop = nnz + len(nodes)
+        arrays = []
+        for array, row in [(graph.data, lengths), (graph.indices, nodes)]:
+            base = array.base
+            if (
+                isinstance(base, np.ndarray)
+                and base.ndim == 1
+                and base.dtype == array.dtype
+                and len(base) >= stop
+                and np.shares_memory(base[:1], array[:1])
+            ):
+                base[nnz:stop] = row
+                arrays.append(base[:stop])
+            else:
+                arrays.append(np.concatenate([array, row.astype(array.dtype)]))
+        # In the type of the graph's indices if possible, or SciPy would
+        # convert, and so copy, the indices.
+        indptr = np.concatenate([graph.indptr, [stop]])
+        if stop <= np.iinfo(graph.indptr.dtype).max:
+            indptr = indptr.astype(graph.indptr.dtype)
+        return sparse.csr_matrix(
+            (arrays[0], arrays[1], indptr), shape=(n_nodes + 1, n_nodes + 1)
         )
 
     def _single_labels(self, point_set):

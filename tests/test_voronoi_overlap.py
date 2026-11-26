@@ -472,6 +472,43 @@ def test_lowest_labels_unreachable(mesh):
     np.testing.assert_array_equal(np.unique(point_set.nn), [-1, 0, 1])
 
 
+def test_graph_with_source(mesh, monkeypatch):
+    """The source of a partition is added to the graph without a copy."""
+    coords, faces, _ = mesh
+    surface = VoronoiSurface(coords, faces, edge_divisions=2)
+    graph = surface._graph
+    n_nodes, nnz = graph.shape[0], graph.nnz
+    assert len(graph.data.base) == len(graph.indices.base) == nnz + n_nodes
+    nodes, lengths = np.array([3, 7, n_nodes - 1]), np.array([0.5, 0.0, 2.0])
+    expected = graph.copy()
+    with surface._source_lock:
+        with_source = surface._graph_with_source(nodes, lengths)
+        assert with_source.shape == (n_nodes + 1, n_nodes + 1)
+        assert np.shares_memory(with_source.data, graph.data)
+        assert np.shares_memory(with_source.indices, graph.indices)
+        assert with_source.indices.dtype == graph.indices.dtype
+        np.testing.assert_array_equal(with_source[n_nodes].indices, nodes)
+        np.testing.assert_array_equal(with_source[n_nodes].data, lengths)
+        assert (with_source[:n_nodes, :n_nodes] != expected).nnz == 0
+        assert with_source[:, n_nodes].nnz == 0
+    # The graph itself is not changed.
+    assert (graph != expected).nnz == 0
+    np.testing.assert_array_equal(graph.data, expected.data)
+
+    # Without the room, as after unpickling, the arrays are copied, and a
+    # partition has the same labels.
+    kwargs = dict(face_indices=[0, 5, 9], weights=np.full((3, 3), 1 / 3))
+    partition = surface.partition(**kwargs)
+    copied = pickle.loads(pickle.dumps(surface))
+    assert not isinstance(copied._graph.data.base, np.ndarray)
+    with copied._source_lock:
+        with_source = copied._graph_with_source(nodes, lengths)
+        assert not np.shares_memory(with_source.data, copied._graph.data)
+        np.testing.assert_array_equal(with_source[n_nodes].data, lengths)
+    for key, value in vars(copied.partition(**kwargs)._point_set).items():
+        np.testing.assert_array_equal(getattr(partition._point_set, key), value)
+
+
 def _expected_samples(partition, f_indices=None, weights=None):
     """The sample labels of every face from compute_occupation."""
     surface, point_set = partition.surface, partition._point_set
