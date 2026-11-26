@@ -923,6 +923,18 @@ class VoronoiSurface:
             entries.append((faces, keys, counts / n_samples * self.face_areas[faces]))
         return entries
 
+    def _kernel_arrays(self, partitions, single):
+        """Stack the arrays of the partitions for ``_kernel.label_samples``.
+
+        ``single`` has the output of ``_single_labels`` for each partition.
+        """
+        point_sets = [partition._point_set for partition in partitions]
+        return (
+            np.stack([point_set.nnd for point_set in point_sets]),
+            np.stack([point_set.nn for point_set in point_sets]),
+            np.stack([single[partition] for partition in partitions]),
+        )
+
     def _face_labels(self, point_set, single, face_indices, samples, distances):
         """Return the labels of the samples of the faces.
 
