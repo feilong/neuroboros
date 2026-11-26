@@ -206,25 +206,37 @@ def compute(case):
 
 
 @lru_cache(maxsize=1)
-def _overlap_object(native, n_div, t_div):
+def _partitions(native, n_div, t_div):
+    """A surface and the partitions that were asked for so far, by name."""
     coords, faces = nb.geometry("midthickness", LR, native)
     sphere = nb.geometry("sphere.reg", LR, native, vertices_only=True)
-    return VoronoiSurface(
+    surface = VoronoiSurface(
         coords, faces, sphere, edge_divisions=n_div, sample_divisions=t_div
     )
+    return surface, {}
+
+
+def _partition(surface, partitions, name):
+    if name == "native":
+        return surface.native
+    if name not in partitions:
+        points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
+        partitions[name] = surface.partition(points)
+    return partitions[name]
+
+
+def _case_partitions(case):
+    surface, partitions = _partitions(case["native"], case["n_div"], case["t_div"])
+    source = _partition(surface, partitions, case["source"])
+    return surface, source, _partition(surface, partitions, case["target"])
 
 
 def compute_class(case):
     """Compute a case with ``VoronoiSurface``."""
     if case["kind"] == "areas":
-        ov = _overlap_object(case["native"], 8, 32)
-        return ov.areas("native")
-    ov = _overlap_object(case["native"], case["n_div"], case["t_div"])
-    for name in [case["source"], case["target"]]:
-        if name not in ov.names:
-            points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
-            ov.add(name, points)
-    return ov.transform(case["source"], case["target"])
+        return _partitions(case["native"], 8, 32)[0].native.areas()
+    _, source, target = _case_partitions(case)
+    return source.overlap(target)
 
 
 def compute_vertex_areas_nn(case):
@@ -234,14 +246,12 @@ def compute_vertex_areas_nn(case):
 
 
 def compute_class_batch(case):
-    """Compute a case with ``VoronoiSurface.transforms``, among other pairs."""
+    """Compute a case with ``VoronoiSurface.overlaps``, among other pairs."""
     if case["kind"] == "areas":
         return compute_class(case)
-    compute_class(case)
-    ov = _overlap_object(case["native"], case["n_div"], case["t_div"])
-    source, target = case["source"], case["target"]
+    surface, source, target = _case_partitions(case)
     pairs = [(target, target), (target, source), (source, target)]
-    return ov.transforms(pairs)[2]
+    return surface.overlaps(pairs)[2]
 
 
 def load():

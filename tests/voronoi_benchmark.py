@@ -70,20 +70,22 @@ STAGES = [
 
 
 def make_surface(coords, faces, sphere):
+    """Return the surface and its partitions by name."""
     from neuroboros.surface.voronoi import VoronoiSurface
 
-    return VoronoiSurface(coords, faces, sphere)
+    surface = VoronoiSurface(coords, faces, sphere)
+    return surface, {"native": surface.native}
 
 
-def add_partition(surface, name, points):
-    surface.add(name, points)
+def add_partition(surface, partitions, name, points):
+    partitions[name] = surface.partition(points)
 
 
-def run_request(surface, request):
+def run_request(surface, partitions, request):
     """Return the outputs of one request by name."""
     if request == "areas":
-        return {"areas native": surface.areas("native")}
-    mats = surface.transforms(request)
+        return {"areas native": partitions["native"].areas()}
+    mats = surface.overlaps([(partitions[a], partitions[b]) for a, b in request])
     return {f"{a} to {b}": mat for (a, b), mat in zip(request, mats)}
 
 
@@ -132,16 +134,16 @@ def run_workload(native, templates, workload):
 
     steps, results = {}, {}
     step = time.perf_counter()
-    surface = make_surface(coords, faces, sphere)
+    surface, partitions = make_surface(coords, faces, sphere)
     steps["surface"] = time.perf_counter() - step
     step = time.perf_counter()
     for name, point_coords in points.items():
-        add_partition(surface, name, point_coords)
+        add_partition(surface, partitions, name, point_coords)
     steps["partitions"] = time.perf_counter() - step
     steps["requests"] = []
     for request in requests:
         step = time.perf_counter()
-        results.update(run_request(surface, request))
+        results.update(run_request(surface, partitions, request))
         steps["requests"].append(time.perf_counter() - step)
     # The measurements end here, so that they do not include the digests.
     total = steps["surface"] + steps["partitions"] + sum(steps["requests"])

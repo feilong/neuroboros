@@ -66,12 +66,12 @@ class Surface:
     def vertex_areas_nn(self, n_div=8, t_div=32):
         """The area of the geodesic Voronoi cell of each vertex.
 
-        See ``VoronoiSurface.areas``.
+        See ``VoronoiPartition.areas``.
         """
         surface = VoronoiSurface(
             self.coords, self.faces, edge_divisions=n_div, sample_divisions=t_div
         )
-        return surface.areas("native")
+        return surface.native.areas()
 
     @property
     def face_areas(self):

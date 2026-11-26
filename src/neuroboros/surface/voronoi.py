@@ -638,7 +638,6 @@ class VoronoiSurface:
         self._face_nodes = _face_nodes(faces, face_edge_ids, edge_points)
         self._native = None
         self._native_partition = None
-        self._point_sets = {}
         self._placement = None
 
     @property
@@ -717,34 +716,6 @@ class VoronoiSurface:
         f_indices = f_indices.astype(np.intp, copy=False)
         return VoronoiPartition(self, self._label_points(f_indices, weights))
 
-    @property
-    def names(self):
-        """The names of the point sets, starting with ``"native"``."""
-        return ("native", *self._point_sets)
-
-    def add(self, name, coords=None, *, f_indices=None, weights=None):
-        """Create a partition as ``partition`` does and keep it as ``name``.
-
-        The name must be new and not ``"native"``.
-        """
-        if name in self.names:
-            raise ValueError(f"A point set named {name!r} already exists.")
-        # Keep the labels and not the partition, which refers to the surface.
-        partition = self.partition(coords, face_indices=f_indices, weights=weights)
-        self._point_sets[name] = partition._labels
-
-    def discard(self, name):
-        """Remove a point set and its labels.
-
-        For ``"native"``, only the labels are removed. They are computed
-        again when needed.
-        """
-        if name == "native":
-            self._native = self._native_partition = None
-        else:
-            self._get(name)
-            del self._point_sets[name]
-
     def overlaps(self, pairs):
         """Overlap areas for several pairs of partitions.
 
@@ -805,37 +776,6 @@ class VoronoiSurface:
             mats.append(mat)
         return mats
 
-    def transforms(self, pairs):
-        """``overlaps`` for pairs of names."""
-        pairs = list(pairs)
-        for pair in pairs:
-            if (
-                not isinstance(pair, (tuple, list))
-                or len(pair) != 2
-                or not all(isinstance(name, str) for name in pair)
-            ):
-                raise TypeError(
-                    f"Each item of pairs must be a (source, target) pair of "
-                    f"names, not {pair!r}."
-                )
-        names = dict.fromkeys(name for pair in pairs for name in pair)
-        for name in names:
-            if name not in self.names:
-                raise KeyError(f"No point set named {name!r}.")
-        # One partition for each name, so that equal pairs are computed once.
-        named = {name: self._named(name) for name in names}
-        return self.overlaps(
-            [(named[source], named[target]) for source, target in pairs]
-        )
-
-    def transform(self, source, target):
-        """``VoronoiPartition.overlap`` for two names."""
-        return self.transforms([(source, target)])[0]
-
-    def areas(self, name):
-        """``VoronoiPartition.areas`` for a name."""
-        return self._named(name).areas()
-
     def _entries(self, requests, chunk_size=64):
         """Return the area contributions of every face for each request.
 
@@ -855,7 +795,7 @@ class VoronoiSurface:
             dict.fromkeys(partition for request in requests for partition in request)
         )
         single = {
-            partition: self._single_labels(partition._labels)
+            partition: self._single_labels(partition._point_set)
             for partition in partitions
         }
         is_mixed = {partition: single[partition] < 0 for partition in partitions}
@@ -891,7 +831,7 @@ class VoronoiSurface:
             boundary = self._boundary_distances(face_indices)
             labels = {
                 partition: self._face_labels(
-                    partition._labels, single[partition], face_indices, *boundary
+                    partition._point_set, single[partition], face_indices, *boundary
                 )
                 for partition in partitions
             }
@@ -949,18 +889,6 @@ class VoronoiSurface:
         local = self._local_labels(point_set, mixed_indices, samples, distances)
         labels[is_mixed] = self._decode(point_set, mixed_indices, local)
         return labels
-
-    def _get(self, name):
-        """Return the labels of a named partition."""
-        return self._named(name)._labels
-
-    def _named(self, name):
-        """Return a partition for a name, labelling ``"native"`` if needed."""
-        if name == "native":
-            return self.native
-        if name not in self._point_sets:
-            raise KeyError(f"No point set named {name!r}.")
-        return VoronoiPartition(self, self._point_sets[name])
 
     def _label_vertices(self):
         """Label the graph nodes with the nearest mesh vertex."""
@@ -1123,11 +1051,11 @@ class VoronoiPartition:
     ``VoronoiSurface.partition``, not directly, and they do not change.
     """
 
-    __slots__ = ("_surface", "_labels", "__weakref__")
+    __slots__ = ("_surface", "_point_set", "__weakref__")
 
-    def __init__(self, surface, labels):
+    def __init__(self, surface, point_set):
         self._surface = surface
-        self._labels = labels
+        self._point_set = point_set
 
     def __repr__(self):
         return f"<VoronoiPartition with {self.n_cells} cells>"
@@ -1140,7 +1068,7 @@ class VoronoiPartition:
     @property
     def n_cells(self):
         """The number of cells, one for each point, in the order of the points."""
-        return self._labels.size
+        return self._point_set.size
 
     def overlap(self, other):
         """Overlap areas between the cells of this partition and of another.
@@ -1177,7 +1105,7 @@ class VoronoiPartition:
 
 @dataclass
 class _PointSet:
-    """The labels of one point set.
+    """The points of one partition, as the pass over the faces uses them.
 
     ``nn`` and ``nnd`` are the nearest point and its distance for each graph
     node. The points inside face ``f`` are
