@@ -139,6 +139,113 @@ def _subdivided_graph(coords, faces, n_div):
     return edges, face_edge_ids, edge_points, new_coords, neighbors
 
 
+def _ranks(keys, n):
+    """Return the rank of each key among the equal keys before it, and the
+    number of times that each of the values 0 to n - 1 occurs."""
+    counts = np.bincount(keys, minlength=n)
+    order = np.argsort(keys, kind="stable")
+    starts = np.cumsum(counts) - counts
+    ranks = np.empty(len(keys), dtype=np.intp)
+    ranks[order] = np.arange(len(keys)) - starts[keys[order]]
+    return ranks, counts
+
+
+def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
+    """Build the distance graph of ``_subdivided_graph`` in CSR form directly.
+
+    The arguments are the vertices and faces of the mesh and the other
+    outputs of ``_subdivided_graph``. The graph has the same connections and
+    lengths, and its indices are sorted, so its three arrays equal those of
+    the graph that ``_subdivided_graph`` builds from lists of connections.
+    Those lists take several times the memory of the graph; here every
+    connection is written to its place in the final arrays.
+
+    No face may have the same vertex twice.
+    """
+    nv, n_edges = len(coords), len(edges)
+    m = edge_points.shape[1]  # Points on each edge.
+    n_nodes = nv + n_edges * m
+    all_coords = np.concatenate([coords, new_coords])
+    segment_lengths = _row_norms(coords[edges[:, 1]] - coords[edges[:, 0]]) / (m + 1)
+
+    # Faces with the same vertices are connected once.
+    _, first_face = np.unique(np.sort(faces, axis=1), axis=0, return_index=True)
+    first_face = np.sort(first_face)
+    unique_faces, unique_edge_ids = faces[first_face], face_edge_ids[first_face]
+
+    # A vertex is connected to the nearest point of each of its edges, and to
+    # the points on the opposite edge of each of its faces. An edge point is
+    # connected to the points before and after it, and for each face of its
+    # edge, to the opposite vertex and to the points of the other two edges.
+    # The rank of an edge or a face at a node gives the place of its block.
+    end_ranks, n_ends = _ranks(edges.T.ravel(), nv)
+    end_ranks = end_ranks.reshape(2, n_edges)
+    corner_ranks, n_corners = _ranks(unique_faces.ravel(), nv)
+    corner_ranks = corner_ranks.reshape(-1, 3)
+    edge_ranks, n_edge_faces = _ranks(unique_edge_ids.ravel(), n_edges)
+    edge_ranks = edge_ranks.reshape(-1, 3)
+    block = 1 + 2 * m
+    degrees = np.concatenate(
+        [n_ends + m * n_corners, np.repeat(2 + block * n_edge_faces, m)]
+    )
+    indptr = np.concatenate([[0], np.cumsum(degrees)])
+    nnz = indptr[-1]
+    index_dtype = np.int32 if max(n_nodes, nnz) <= np.iinfo(np.int32).max else np.int64
+    indices = np.empty(nnz, dtype=index_dtype)
+    data = np.empty(nnz)
+
+    def fill(places, columns, lengths):
+        indices[places.ravel()] = np.broadcast_to(columns, places.shape).ravel()
+        data[places.ravel()] = np.broadcast_to(lengths, places.shape).ravel()
+
+    # Consecutive nodes along each edge, including its two end vertices.
+    chain = np.concatenate([edges[:, :1], edge_points, edges[:, 1:]], axis=1)
+    lengths = segment_lengths[:, np.newaxis]
+    fill(indptr[edges[:, 0]] + end_ranks[0], chain[:, 1], segment_lengths)
+    fill(indptr[edges[:, 1]] + end_ranks[1], chain[:, -2], segment_lengths)
+    fill(indptr[edge_points], chain[:, :-2], lengths)
+    fill(indptr[edge_points] + 1, chain[:, 2:], lengths)
+
+    steps = np.arange(m)
+    # For a block of faces at a time, to limit the temporary arrays.
+    for start in range(0, len(unique_faces), 2**14):
+        chunk = slice(start, start + 2**14)
+        # The points of the three edges of each face: (n, 3, m).
+        points = edge_points[unique_edge_ids[chunk]]
+        # The start of the block of the face in the row of each point.
+        blocks = indptr[points] + 2 + block * edge_ranks[chunk][:, :, np.newaxis]
+
+        # Each point and the vertex opposite its edge. The edge of local
+        # vertices (i, i + 1) is opposite local vertex i + 2.
+        opposite = unique_faces[chunk][:, [2, 0, 1]]
+        columns = np.broadcast_to(opposite[:, :, np.newaxis], points.shape)
+        lengths = _connection_distances(all_coords, points.ravel(), columns.ravel())
+        lengths = lengths.reshape(points.shape)
+        fill(blocks, columns, lengths)
+        places = (
+            indptr[opposite] + n_ends[opposite] + m * corner_ranks[chunk][:, [2, 0, 1]]
+        )
+        fill(places[:, :, np.newaxis] + steps, points, lengths)
+
+        # Each pair of points on different edges: point s of local edge i
+        # with point t of local edge i + 1, of shape (n, 3, m, m). In the row
+        # of the first point, the points of the next edge come first; in the
+        # row of the second, the points of the previous edge come last.
+        first = np.broadcast_to(points[:, :, :, np.newaxis], points.shape + (m,))
+        second = np.broadcast_to(points[:, [1, 2, 0], np.newaxis, :], first.shape)
+        lengths = _connection_distances(all_coords, first.ravel(), second.ravel())
+        lengths = lengths.reshape(first.shape)
+        fill(blocks[:, :, :, np.newaxis] + 1 + steps, second, lengths)
+        places = blocks[:, [1, 2, 0], np.newaxis, :] + 1 + m + steps[:, np.newaxis]
+        fill(places, first, lengths)
+
+    graph = sparse.csr_matrix(
+        (data, indices, indptr.astype(index_dtype)), shape=(n_nodes, n_nodes)
+    )
+    graph.sort_indices()
+    return graph
+
+
 def _subdivide_edges(coords, faces, n_div):
     """Subdivide each edge into ``n_div`` parts.
 

@@ -131,6 +131,52 @@ def test_subdivided_graph_arrays(n_div):
     np.testing.assert_array_equal(edges[face_edge_ids], pairs)
 
 
+def _graph_meshes():
+    """Meshes for the graph builders, as (name, coords, faces)."""
+    rng = np.random.default_rng(0)
+    sphere = rng.standard_normal((30, 3))
+    sphere /= np.linalg.norm(sphere, axis=1, keepdims=True)
+    faces = ConvexHull(sphere).simplices
+    faces = np.array([f[rng.permutation(3)] for f in faces])
+    meshes = [("convex", sphere, faces)]
+    # Two faces twice, in another order, and an edge with three faces.
+    repeated = np.vstack(
+        [faces, faces[3][[1, 2, 0]], faces[5], [faces[0][0], faces[0][1], 29]]
+    )
+    meshes.append(("repeated faces", sphere, repeated))
+    # An open mesh with a vertex that no face uses and two vertices at the
+    # same place, which gives connections of length zero.
+    coords = np.vstack([sphere, [[5.0, 5.0, 5.0]], sphere[:1]])
+    meshes.append(("open", coords, np.vstack([repeated[:20], [[0, 31, 7]]])))
+    # Random triangles, which share vertices and edges in every way.
+    for seed in range(8):
+        rng = np.random.default_rng(seed)
+        nv = rng.integers(4, 12)
+        faces = [rng.choice(nv, 3, replace=False) for _ in range(rng.integers(1, 25))]
+        meshes.append((f"random {seed}", rng.standard_normal((nv, 3)), np.array(faces)))
+    return meshes
+
+
+@pytest.mark.parametrize("n_div", [1, 2, 3, 8])
+@pytest.mark.parametrize("mesh", _graph_meshes(), ids=lambda mesh: mesh[0])
+def test_filled_graph(mesh, n_div):
+    """The graph that is filled directly has the same three arrays."""
+    _, coords, faces = mesh
+    edges, face_edge_ids, edge_points, new_coords, expected = voronoi._subdivided_graph(
+        coords, faces, n_div
+    )
+    graph = voronoi._filled_graph(
+        coords, new_coords, faces, edges, face_edge_ids, edge_points
+    )
+    assert expected.has_sorted_indices
+    assert graph.shape == expected.shape
+    for name in ("indptr", "indices", "data"):
+        a, b = getattr(graph, name), getattr(expected, name)
+        assert a.dtype == b.dtype
+        np.testing.assert_array_equal(a, b)
+    assert (graph != graph.T).nnz == 0
+
+
 def _assert_equal_outputs(a, b):
     """Assert that two outputs, or tuples of outputs, are exactly equal."""
     if isinstance(a, tuple):
