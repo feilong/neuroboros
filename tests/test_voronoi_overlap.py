@@ -106,6 +106,30 @@ def test_surface_is_read_only(mesh):
     partition.overlap(surface.native)
 
 
+def test_constructor_memory_order(mesh, points):
+    """Arrays in Fortran order, or views with steps, give the same results."""
+    coords, faces, sphere = mesh
+    expected = VoronoiSurface(coords, faces, sphere, sample_divisions=4)
+    expected = expected.native.overlap(expected.partition(points))
+    doubled = np.repeat(coords, 2, axis=1)
+    for args in [
+        [np.asfortranarray(x) for x in mesh],
+        [doubled[:, ::2], np.asfortranarray(faces)[::1], sphere.T.copy().T],
+    ]:
+        surface = VoronoiSurface(*args, sample_divisions=4)
+        for array in (surface.coords, surface.faces, surface.sphere):
+            assert array.flags.c_contiguous
+        partition = surface.partition(np.asfortranarray(points))
+        _assert_identical(surface.native.overlap(partition), expected)
+        f_indices, weights = Sphere(sphere, faces).barycentric(
+            points, eps=1e-7, return_sparse=False
+        )
+        partition = surface.partition(
+            face_indices=f_indices, weights=np.asfortranarray(weights)
+        )
+        _assert_identical(surface.native.overlap(partition), expected)
+
+
 @pytest.mark.parametrize("name", ["coords", "sphere"])
 @pytest.mark.parametrize("value", [np.nan, np.inf])
 def test_constructor_rejects_non_finite(mesh, name, value):

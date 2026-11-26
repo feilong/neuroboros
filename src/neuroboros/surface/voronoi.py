@@ -728,7 +728,7 @@ class VoronoiSurface:
         self, coords, faces, sphere=None, edge_divisions=8, sample_divisions=32
     ):
         coords = _finite_copy(coords, "coords")
-        faces = np.array(faces)
+        faces = np.array(faces, order="C")
         if coords.ndim != 2 or coords.shape[1] != 3:
             raise ValueError(f"coords must have shape (nv, 3), not {coords.shape}.")
         if faces.ndim != 2 or faces.shape[1] != 3:
@@ -1519,8 +1519,9 @@ def _lowest_labels(graph, distances, labels, point_nodes=None, point_distances=N
 
 
 def _finite_copy(x, name):
-    """Copy an array as float64, checking that every value is finite."""
-    x = np.array(x, dtype=float)
+    """Copy an array as float64 in C order, checking that every value is
+    finite. The compiled kernel reads the arrays in that order."""
+    x = np.array(x, dtype=float, order="C")
     if not np.all(np.isfinite(x)):
         raise ValueError(f"{name} must contain only finite values.")
     return x
