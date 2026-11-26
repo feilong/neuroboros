@@ -3,6 +3,10 @@ Previous implementations of functions in ``voronoi.py``, written with Python
 loops and dicts; the Voronoi diagrams run Dijkstra's algorithm once per
 source vertex. They give the same results up to ties and rounding, but are
 much slower.
+
+The last five functions, from ``inverse_face_mapping`` to
+``overlap_transform``, are copies of the functions that ``voronoi.py``
+deprecates, so that this module has the whole former API.
 """
 
 import heapq
@@ -10,6 +14,7 @@ import warnings
 from datetime import datetime
 
 import numpy as np
+import scipy.sparse as sparse
 from scipy.spatial.distance import cdist
 
 
@@ -355,3 +360,182 @@ def native_voronoi(coords, faces, e_mapping, neighbors, verbose=False):
             )
 
     return nn, nnd
+
+
+def inverse_face_mapping(f_indices, weights, coords, faces):
+    """Inverse face mapping.
+
+    This function computes the mapping from the original faces to the target
+    vertices. Given a triangle face on the original mesh, the mapping returns
+    the indices of the target vertices inside the triangle face and the
+    coordinates of the target vertices.
+
+    Parameters
+    ----------
+    f_indices : ndarray of shape (nv_target,)
+        Each element is the index of the triangle face on the original mesh
+        that contains the corresponding vertex on the target mesh.
+    weights : ndarray of shape (nv_target, 3)
+        Each row is the barycentric weights of the three vertices of the face
+        for the corresponding vertex on the target mesh.
+    coords : ndarray of shape (nv, 3)
+        The coordinates of the vertices of the original mesh.
+    faces : ndarray of shape (nf, 3)
+        The vertex indices of each triangle face of the original mesh.
+
+    Returns
+    -------
+    f_inv : dict
+        The inverse mapping from the original faces to the target vertices.
+        The keys are the indices of the original faces. The values are lists
+        of pairs of the indices of the target vertices and the coordinates of
+        the target vertices.
+    """
+    f_inv = {}
+    for i, f_idx in enumerate(f_indices):
+        if f_idx not in f_inv:
+            f_inv[f_idx] = []
+        f_inv[f_idx].append([i, weights[i] @ coords[faces[f_idx]]])
+    return f_inv
+
+
+def split_triangle(t_div):
+    """Return barycentric coordinates of the ``t_div**2`` subtriangle centroids."""
+    ww1 = []
+    for i in range(t_div):
+        for j in range(t_div - i):
+            k = t_div - i - j - 1
+            ww1.append([i, j, k])
+    ww1 = (np.array(ww1) + 1.0 / 3) / t_div
+    ww2 = []
+    for i in range(t_div - 1):
+        for j in range(t_div - i - 1):
+            k = t_div - i - j - 1
+            ww2.append([i, j, k])
+    # Reshape so that t_div=1, which has no inverted sub-triangles, gives an
+    # empty (0, 3) array.
+    ww2 = (np.reshape(ww2, (-1, 3)) + np.array([[2 / 3, 2 / 3, -1 / 3]])) / t_div
+    ww = np.concatenate([ww1, ww2])
+    return ww
+
+
+def compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww):
+    """
+    Parameters
+    ----------
+    f_idx : int
+        The index of the triangular face on the original mesh.
+    f : ndarray of shape (3,)
+        The vertex indices of the triangular face.
+    coords : ndarray of shape (nv, 3)
+        The coordinates of the vertices of the subdivided mesh.
+    indices : ndarray of shape (n,)
+        The indices of all vertices of the subdivided mesh that are on the
+        edges of the triangular face.
+    nn : ndarray of shape (nv,)
+        The indices of the nearest vertex on the target mesh for each vertex
+        of the subdivided mesh.
+    nnd : ndarray of shape (nv,)
+        The geodesic distances between each vertex of the subdivided mesh and
+        the nearest vertex on the target mesh.
+    f_inv : dict
+        The inverse mapping from the original faces to the target vertices.
+    ww : ndarray of shape (m, 3)
+        The barycentric weights of the points on the triangular face. Usually
+        the output of the ``split_triangle`` function.
+
+    Returns
+    -------
+
+    """
+    nn1 = [nn[indices]]
+    u = np.unique(nn1)
+
+    # The same vertex of the target mesh is the nearest for all vertices on
+    # the edges of the triangular face, and no vertex of the target mesh is
+    # inside the face.
+    if len(u) == 1 and f_idx not in f_inv:
+        return {u[0]: np.ones((ww.shape[0],), dtype=bool)}
+
+    cc1 = [coords[indices]]
+    dd1 = [nnd[indices]]
+    # Vertices of the target mesh that are within the triangular face.
+    if f_idx in f_inv:
+        for i, c in f_inv[f_idx]:
+            cc1.append([c])
+            dd1.append([0.0])
+            nn1.append([i])
+    cc1 = np.concatenate(cc1)
+    dd1 = np.concatenate(dd1)
+    nn1 = np.concatenate(nn1)
+    cc2 = ww @ coords[f]
+    d = cdist(cc1, cc2, "euclidean") + dd1[:, np.newaxis]
+    idx = np.argmin(d, axis=0)
+    occupation = nn1[idx]
+    return {u: occupation == u for u in np.unique(occupation)}
+
+
+def compute_overlap(
+    faces,
+    face_areas,
+    e_mapping,
+    coords,
+    nn,
+    nnd,
+    f_inv,
+    nn2,
+    nnd2,
+    f_inv2,
+    nv1,
+    nv2,
+    t_div=32,
+):
+    mat = sparse.lil_matrix((nv1, nv2))
+    ww = split_triangle(t_div)
+    for f_idx, f in enumerate(faces):
+        a, b, c = sorted(faces[f_idx])
+        indices = np.concatenate(
+            [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
+        )
+        uu1 = compute_occupation(f_idx, f, coords, indices, nn, nnd, f_inv, ww)
+        uu2 = compute_occupation(f_idx, f, coords, indices, nn2, nnd2, f_inv2, ww)
+        for u1, m1 in uu1.items():
+            for u2, m2 in uu2.items():
+                overlap = np.logical_and(m1, m2).mean()
+                if overlap:
+                    mat[u1, u2] += overlap * face_areas[f_idx]
+    return mat.tocsr()
+
+
+def overlap_transform(
+    anat,
+    sphere,
+    tpl_coords,
+    coords,
+    e_mapping,
+    neighbors,
+    native_nn,
+    native_nnd,
+    t_div=32,
+):
+    f_indices, weights = sphere.barycentric(tpl_coords, eps=1e-7, return_sparse=False)
+    nn, nnd = subdivision_voronoi(
+        coords, anat.faces, e_mapping, neighbors, f_indices, weights
+    )
+    f_inv = inverse_face_mapping(f_indices, weights, anat.coords, anat.faces)
+    mat = compute_overlap(
+        anat.faces,
+        anat.face_areas,
+        e_mapping,
+        coords,
+        native_nn,
+        native_nnd,
+        {},
+        nn,
+        nnd,
+        f_inv,
+        anat.nv,
+        tpl_coords.shape[0],
+        t_div=t_div,
+    )
+    return mat

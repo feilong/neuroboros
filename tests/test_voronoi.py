@@ -305,6 +305,55 @@ def deprecated_calls():
     }
 
 
+def test_legacy_module_has_the_former_api(deprecated_calls):
+    """The functions copied to voronoi_legacy give what the deprecated ones give."""
+    for name in ["split_triangle", "compute_occupation", "compute_overlap"]:
+        call = deprecated_calls[name]
+        _assert_equal_outputs(
+            call(getattr(voronoi_legacy, name)), call(getattr(voronoi, name))
+        )
+    call = deprecated_calls["inverse_face_mapping"]
+    f_inv, expected = call(voronoi_legacy.inverse_face_mapping), call(
+        voronoi.inverse_face_mapping
+    )
+    assert list(f_inv) == list(expected)
+    for points, expected_points in zip(f_inv.values(), expected.values()):
+        assert [i for i, _ in points] == [i for i, _ in expected_points]
+        np.testing.assert_array_equal(
+            [c for _, c in points], [c for _, c in expected_points]
+        )
+
+    # overlap_transform labels the template with the function of its module,
+    # which takes the graph in the format of its module.
+    sphere = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]) / np.sqrt(3)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    surf, points = Surface(sphere, faces), sphere[:3].mean(axis=0, keepdims=True)
+    mats = []
+    for module in (voronoi_legacy, voronoi):
+        new_coords, e_mapping, graph = module.subdivide_edges(sphere, faces, 2)
+        coords = np.concatenate([sphere, new_coords])
+        nn, nnd = voronoi.native_voronoi(*_as_new(coords, faces, e_mapping, graph))
+        mats.append(
+            module.overlap_transform(
+                surf,
+                Sphere(sphere, faces),
+                points,
+                coords,
+                e_mapping,
+                graph,
+                nn,
+                nnd,
+                2,
+            )
+        )
+    _assert_equal_outputs(*mats)
+
+
+def _as_new(coords, faces, e_mapping, graph):
+    """The arguments of native_voronoi, with a graph in either format."""
+    return coords, faces, e_mapping, voronoi.neighbors_to_graph(graph, len(coords))
+
+
 @pytest.mark.parametrize("name", DEPRECATED)
 def test_deprecation_warning(deprecated_calls, name):
     func = getattr(voronoi, name)
