@@ -3,10 +3,12 @@ import importlib
 import os
 import warnings
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sparse
+from joblib import effective_n_jobs
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial.distance import cdist
 
@@ -768,7 +770,7 @@ class VoronoiSurface:
             )
         return VoronoiPartition(self, point_set)
 
-    def overlaps(self, pairs):
+    def overlaps(self, pairs, n_jobs=1):
         """Overlap areas for several pairs of partitions.
 
         All pairs are computed in one pass over the faces, and the partitions
@@ -783,6 +785,10 @@ class VoronoiSurface:
             The source and target partitions of each matrix, which must be
             partitions of this surface. A pair can be given more than once,
             and so can its reverse.
+        n_jobs : int
+            The number of threads that label the samples: 1 for none, and -1
+            for one for each CPU. The results do not depend on it. Threads
+            help only with the compiled kernel.
 
         Returns
         -------
@@ -808,7 +814,7 @@ class VoronoiSurface:
 
         # A pair that is given several times is computed once.
         requests = list(dict.fromkeys(pairs))
-        entries = dict(zip(requests, self._entries(requests)))
+        entries = dict(zip(requests, self._entries(requests, n_jobs=n_jobs)))
         mats = []
         for source, target in pairs:
             n_source, n_target = source.n_cells, target.n_cells
@@ -828,7 +834,7 @@ class VoronoiSurface:
             mats.append(mat)
         return mats
 
-    def _entries(self, requests, chunk_size=64):
+    def _entries(self, requests, chunk_size=64, n_jobs=1):
         """Return the area contributions of every face for each request.
 
         A request is a tuple of one or two partitions. Its result is three
@@ -843,7 +849,9 @@ class VoronoiSurface:
         All requests are served by one pass over the faces, and the
         partitions use the same sample distances. The samples are labelled by
         the compiled kernel if it is available, and with NumPy otherwise.
-        Both give the same labels.
+        Both give the same labels. With ``n_jobs`` threads, the chunks of
+        faces are processed at the same time and merged in face order, so the
+        entries do not depend on ``chunk_size`` or ``n_jobs``.
         """
         partitions = list(
             dict.fromkeys(partition for request in requests for partition in request)
@@ -883,17 +891,20 @@ class VoronoiSurface:
         for partition in partitions:
             any_mixed |= is_mixed[partition]
         visited_faces = np.flatnonzero(any_mixed)
-        for start in range(0, len(visited_faces), chunk_size):
-            face_indices = visited_faces[start : start + chunk_size]
+
+        def chunk_entries(face_indices):
+            """Return the entries of some faces for each request, or None."""
             labels = self._sample_labels(
                 partitions, single, face_indices, kernel_arrays
             )
-            for request, (face_parts, key_parts, count_parts) in zip(requests, parts):
+            chunk_parts = []
+            for request in requests:
                 # The faces where both sets have one label are counted above.
                 rows = np.zeros(len(face_indices), dtype=bool)
                 for partition in request:
                     rows |= is_mixed[partition][face_indices]
                 if not rows.any():
+                    chunk_parts.append(None)
                     continue
                 sorted_keys = np.sort(
                     encode_labels(
@@ -908,9 +919,31 @@ class VoronoiSurface:
                 is_run_start = np.ones(sorted_keys.shape, dtype=bool)
                 is_run_start[:, 1:] = sorted_keys[:, 1:] != sorted_keys[:, :-1]
                 run_starts = np.flatnonzero(is_run_start)
-                face_parts.append(face_indices[rows][run_starts // n_samples])
-                key_parts.append(sorted_keys.ravel()[run_starts])
-                count_parts.append(np.diff(run_starts, append=sorted_keys.size))
+                chunk_parts.append(
+                    (
+                        face_indices[rows][run_starts // n_samples],
+                        sorted_keys.ravel()[run_starts],
+                        np.diff(run_starts, append=sorted_keys.size),
+                    )
+                )
+            return chunk_parts
+
+        chunks = [
+            visited_faces[start : start + chunk_size]
+            for start in range(0, len(visited_faces), chunk_size)
+        ]
+        n_threads = min(effective_n_jobs(n_jobs), len(chunks))
+        if n_threads > 1:
+            # The chunks are independent, and map returns them in order.
+            with ThreadPoolExecutor(n_threads) as pool:
+                results = list(pool.map(chunk_entries, chunks))
+        else:
+            results = map(chunk_entries, chunks)
+        for chunk_parts in results:
+            for part, chunk_part in zip(parts, chunk_parts):
+                if chunk_part is not None:
+                    for arrays, array in zip(part, chunk_part):
+                        arrays.append(array)
 
         # Merge single and mixed faces back into face order. Keep every face's
         # contribution separate so chunk boundaries cannot change rounding.
@@ -1176,13 +1209,15 @@ class VoronoiPartition:
         """The number of cells, one for each point, in the order of the points."""
         return self._point_set.size
 
-    def overlap(self, other):
+    def overlap(self, other, n_jobs=1):
         """Overlap areas between the cells of this partition and of another.
 
         Parameters
         ----------
         other : VoronoiPartition
             A partition of the same surface.
+        n_jobs : int
+            The number of threads, as in ``VoronoiSurface.overlaps``.
 
         Returns
         -------
@@ -1193,17 +1228,18 @@ class VoronoiPartition:
             ``b.overlap(a)`` equals ``a.overlap(b).T`` exactly, and
             ``a.overlap(a)`` is diagonal, with ``a.areas()`` on its diagonal.
         """
-        return self._surface.overlaps([(self, other)])[0]
+        return self._surface.overlaps([(self, other)], n_jobs=n_jobs)[0]
 
-    def areas(self):
+    def areas(self, n_jobs=1):
         """The area of each cell.
 
         Return a new array of shape (n_cells,). For the native partition,
         this equals ``Surface.vertex_areas_nn`` exactly. The row sums of an
         overlap can differ slightly, because they group the additions
-        differently.
+        differently. ``n_jobs`` is the number of threads, as in
+        ``VoronoiSurface.overlaps``.
         """
-        ((_, keys, values),) = self._surface._entries([(self,)])
+        ((_, keys, values),) = self._surface._entries([(self,)], n_jobs=n_jobs)
         areas = np.zeros(self.n_cells)
         np.add.at(areas, keys, values)
         return areas

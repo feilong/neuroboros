@@ -829,6 +829,29 @@ def test_paths_give_the_same_entries(mesh, monkeypatch, labelling_path):
             np.testing.assert_array_equal(x, y)
 
 
+@pytest.mark.parametrize("n_jobs", [2, 3, -1])
+def test_threads_do_not_change_results(mesh, n_jobs):
+    partitions, _ = _partitions(mesh, sizes=SIX_SETS)
+    surface = partitions["native"].surface
+    requests = [(a, b) for a in partitions.values() for b in partitions.values()]
+    requests += [(a,) for a in partitions.values()]
+    expected = surface._entries(requests, chunk_size=5)
+    for a, b in zip(surface._entries(requests, chunk_size=5, n_jobs=n_jobs), expected):
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x, y)
+
+    native, d = partitions["native"], partitions["d"]
+    pairs = [(native, d), (d, d), (d, native)]
+    for mat, expected in zip(
+        surface.overlaps(pairs, n_jobs=n_jobs), surface.overlaps(pairs)
+    ):
+        _assert_identical(mat, expected)
+    _assert_identical(native.overlap(d, n_jobs=n_jobs), native.overlap(d))
+    np.testing.assert_array_equal(d.areas(n_jobs=n_jobs), d.areas())
+    with pytest.raises(ValueError, match="n_jobs"):
+        native.areas(n_jobs=0)
+
+
 def test_outputs_are_new_arrays(mesh):
     partitions, _ = _partitions(mesh)
     native, many = partitions["native"], partitions["many"]

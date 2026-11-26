@@ -83,11 +83,12 @@ def add_partition(surface, partitions, name, points):
     partitions[name] = surface.partition(points)
 
 
-def run_request(surface, partitions, request):
+def run_request(surface, partitions, request, n_jobs=1):
     """Return the outputs of one request by name."""
     if request == "areas":
-        return {"areas native": partitions["native"].areas()}
-    mats = surface.overlaps([(partitions[a], partitions[b]) for a, b in request])
+        return {"areas native": partitions["native"].areas(n_jobs=n_jobs)}
+    pairs = [(partitions[a], partitions[b]) for a, b in request]
+    mats = surface.overlaps(pairs, n_jobs=n_jobs)
     return {f"{a} to {b}": mat for (a, b), mat in zip(request, mats)}
 
 
@@ -123,7 +124,7 @@ def peak_memory_gb():
     return peak * (1 if sys.platform == "darwin" else 1024) / 1e9
 
 
-def run_workload(native, templates, workload):
+def run_workload(native, templates, workload, n_jobs=1):
     """Run one workload in this process and return its measurements."""
     import neuroboros as nb
 
@@ -151,7 +152,7 @@ def run_workload(native, templates, workload):
     steps["requests"] = []
     for request in requests:
         step = time.perf_counter()
-        results.update(run_request(surface, partitions, request))
+        results.update(run_request(surface, partitions, request, n_jobs))
         steps["requests"].append(time.perf_counter() - step)
     # The measurements end here, so that they do not include the digests.
     total = steps["surface"] + steps["partitions"] + sum(steps["requests"])
@@ -170,6 +171,7 @@ def run_workload(native, templates, workload):
 def run_in_subprocess(args, workload):
     command = [sys.executable, __file__, "--child", workload]
     command += ["--native", args.native, "--templates", *args.templates]
+    command += ["--n-jobs", str(args.n_jobs)]
     env = dict(os.environ, NEUROBOROS_VORONOI_KERNEL=str(int(args.kernel == "on")))
     out = subprocess.run(command, capture_output=True, text=True, env=env)
     lines = [line for line in out.stdout.splitlines() if line.startswith(MARKER)]
@@ -203,6 +205,7 @@ def main():
     parser.add_argument("--templates", nargs=3, help="Three spaces, coarse to fine.")
     parser.add_argument("--workloads", nargs="+", help="Default: all.")
     parser.add_argument("--kernel", default="on", choices=["on", "off"])
+    parser.add_argument("--n-jobs", type=int, default=1, help="Threads of a request.")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--note", default="", help="Stored with the record.")
@@ -211,7 +214,7 @@ def main():
     args.templates = args.templates or TEMPLATES[args.native]
 
     if args.child:
-        result = run_workload(args.native, args.templates, args.child)
+        result = run_workload(args.native, args.templates, args.child, args.n_jobs)
         print(MARKER + json.dumps(result))
         return
 
@@ -245,6 +248,7 @@ def main():
             date=datetime.date.today().isoformat(),
             note=args.note,
             kernel=all(result["kernel"] for result in results.values()),
+            n_jobs=args.n_jobs,
             environment=vg.environment(),
             native=args.native,
             templates=args.templates,
