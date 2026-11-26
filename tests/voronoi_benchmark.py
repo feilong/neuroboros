@@ -60,10 +60,10 @@ def workloads(templates):
 STAGES = [
     (None, "_subdivided_graph"),
     (None, "dijkstra"),
-    ("VoronoiOverlap", "_label_points"),
-    ("VoronoiOverlap", "_boundary_distances"),
-    ("VoronoiOverlap", "_local_labels"),
-    ("VoronoiOverlap", "_decode"),
+    ("VoronoiSurface", "_label_points"),
+    ("VoronoiSurface", "_boundary_distances"),
+    ("VoronoiSurface", "_local_labels"),
+    ("VoronoiSurface", "_decode"),
 ]
 
 
@@ -71,9 +71,9 @@ STAGES = [
 
 
 def make_surface(coords, faces, sphere):
-    from neuroboros.surface.voronoi import VoronoiOverlap
+    from neuroboros.surface.voronoi import VoronoiSurface
 
-    return VoronoiOverlap(coords, faces, sphere)
+    return VoronoiSurface(coords, faces, sphere)
 
 
 def add_partition(surface, name, points):

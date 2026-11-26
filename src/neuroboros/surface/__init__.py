@@ -19,7 +19,7 @@ from .properties import (
 from .subdivision import surface_subdivision
 from .union import compute_union_sphere
 from .voronoi import (
-    VoronoiOverlap,
+    VoronoiSurface,
     compute_occupation,
     native_voronoi,
     overlap_transform,
@@ -66,10 +66,12 @@ class Surface:
     def vertex_areas_nn(self, n_div=8, t_div=32):
         """The area of the geodesic Voronoi cell of each vertex.
 
-        See ``VoronoiOverlap.areas``.
+        See ``VoronoiSurface.areas``.
         """
-        ov = VoronoiOverlap(self.coords, self.faces, n_div=n_div, t_div=t_div)
-        return ov.areas("native")
+        surface = VoronoiSurface(
+            self.coords, self.faces, edge_divisions=n_div, sample_divisions=t_div
+        )
+        return surface.areas("native")
 
     @property
     def face_areas(self):

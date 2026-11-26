@@ -561,7 +561,7 @@ def _overlap_transform(
     return mat
 
 
-class VoronoiOverlap:
+class VoronoiSurface:
     """Overlap areas between the geodesic Voronoi cells of point sets.
 
     The point sets are the vertices of the mesh (``"native"``) and the point
@@ -580,13 +580,17 @@ class VoronoiOverlap:
     sphere : ndarray of shape (nv, 3) or None
         The registered sphere (e.g., sphere.reg) with the same faces, used by
         ``add`` to place point sets given by their coordinates.
-    n_div : int
-        The number of segments to divide each edge into for the graph.
-    t_div : int
-        Each face is sampled with ``t_div**2`` points.
+    edge_divisions : int
+        The number of segments to divide each edge into for the graph. More
+        segments give more accurate geodesic distances.
+    sample_divisions : int
+        Each face is sampled with ``sample_divisions**2`` points. More
+        samples give more accurate areas.
     """
 
-    def __init__(self, coords, faces, sphere=None, n_div=8, t_div=32):
+    def __init__(
+        self, coords, faces, sphere=None, edge_divisions=8, sample_divisions=32
+    ):
         coords = _finite_copy(coords, "coords")
         faces = np.array(faces)
         if coords.ndim != 2 or coords.shape[1] != 3:
@@ -607,20 +611,24 @@ class VoronoiOverlap:
                     f"sphere must have the shape of coords {coords.shape}, "
                     f"not {sphere.shape}."
                 )
-        for name, value in [("n_div", n_div), ("t_div", t_div)]:
+        for name, value in [
+            ("edge_divisions", edge_divisions),
+            ("sample_divisions", sample_divisions),
+        ]:
             if not isinstance(value, (int, np.integer)) or value < 1:
                 raise ValueError(f"{name} must be a positive integer, not {value!r}.")
 
         self.coords = coords
         self.faces = faces
         self.sphere = sphere
-        self.n_div = int(n_div)
-        self.t_div = int(t_div)
+        self.edge_divisions = int(edge_divisions)
+        self.sample_divisions = int(sample_divisions)
         self.face_areas = compute_face_areas(coords, faces)
-        self._ww = _split_triangle(self.t_div)  # Barycentric sample coordinates.
+        # Barycentric sample coordinates.
+        self._ww = _split_triangle(self.sample_divisions)
 
         _, face_edge_ids, edge_points, new_coords, graph = _subdivided_graph(
-            coords, faces, self.n_div
+            coords, faces, self.edge_divisions
         )
         self._node_coords = np.concatenate([coords, new_coords])
         self._graph = graph
@@ -1116,7 +1124,7 @@ Similar to https://github.com/mojocorp/geodesic subdivision
 """
 
 
-def _deprecated(func, name, alternative="VoronoiOverlap"):
+def _deprecated(func, name, alternative="VoronoiSurface"):
     """Wrap ``func`` so that calling it by its former public ``name`` warns."""
 
     @functools.wraps(func)

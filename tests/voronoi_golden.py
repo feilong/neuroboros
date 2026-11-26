@@ -33,7 +33,7 @@ from voronoi_reference import (
 
 import neuroboros as nb
 from neuroboros.surface import Sphere, Surface
-from neuroboros.surface.voronoi import VoronoiOverlap
+from neuroboros.surface.voronoi import VoronoiSurface
 
 GOLDEN_FN = os.path.join(os.path.dirname(__file__), "data", "voronoi_golden.json")
 LR = "l"
@@ -210,11 +210,13 @@ def compute(case):
 def _overlap_object(native, n_div, t_div):
     coords, faces = nb.geometry("midthickness", LR, native)
     sphere = nb.geometry("sphere.reg", LR, native, vertices_only=True)
-    return VoronoiOverlap(coords, faces, sphere, n_div=n_div, t_div=t_div)
+    return VoronoiSurface(
+        coords, faces, sphere, edge_divisions=n_div, sample_divisions=t_div
+    )
 
 
 def compute_class(case):
-    """Compute a case with ``VoronoiOverlap``."""
+    """Compute a case with ``VoronoiSurface``."""
     if case["kind"] == "areas":
         ov = _overlap_object(case["native"], 8, 32)
         return ov.areas("native")
@@ -235,7 +237,7 @@ def compute_vertex_areas_nn(case):
 
 
 def compute_class_batch(case):
-    """Compute a case with ``VoronoiOverlap.transforms``, among other pairs."""
+    """Compute a case with ``VoronoiSurface.transforms``, among other pairs."""
     if case["kind"] == "areas":
         return compute_class(case)
     compute_class(case)

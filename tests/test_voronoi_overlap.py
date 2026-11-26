@@ -6,7 +6,7 @@ import voronoi_reference as reference
 from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi
-from neuroboros.surface.voronoi import VoronoiOverlap
+from neuroboros.surface.voronoi import VoronoiSurface
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def mesh():
 @pytest.mark.parametrize("n_div", [1, 2, 3, 8])
 def test_face_nodes_match_e_mapping(mesh, n_div):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces, n_div=n_div)
+    ov = VoronoiSurface(coords, faces, edge_divisions=n_div)
     assert ov._face_nodes.shape == (len(faces), 3 * n_div)
     _, e_mapping, graph = reference.subdivide_edges(coords, faces, n_div)
     for f, nodes in zip(faces, ov._face_nodes):
@@ -38,7 +38,7 @@ def test_face_nodes_match_e_mapping(mesh, n_div):
 
 def test_constructor(mesh):
     coords, faces, sphere = mesh
-    ov = VoronoiOverlap(coords.astype(np.float32), faces, sphere)
+    ov = VoronoiSurface(coords.astype(np.float32), faces, sphere)
     surf = Surface(coords.astype(np.float32), faces)
     assert ov.names == ("native",)
     assert ov.coords.dtype == np.float64
@@ -53,8 +53,8 @@ def test_constructor(mesh):
 @pytest.mark.parametrize("dtype", [np.uint64, np.uint32, np.int32, np.int16])
 def test_constructor_face_dtypes(mesh, dtype):
     coords, faces, _ = mesh
-    expected = VoronoiOverlap(coords, faces)
-    ov = VoronoiOverlap(coords, faces.astype(dtype))
+    expected = VoronoiSurface(coords, faces)
+    ov = VoronoiSurface(coords, faces.astype(dtype))
     assert ov.faces.dtype == np.intp
     assert ov._face_nodes.dtype == np.intp
     np.testing.assert_array_equal(ov._face_nodes, expected._face_nodes)
@@ -64,7 +64,7 @@ def test_constructor_face_dtypes(mesh, dtype):
 
 def test_constructor_copies_inputs(mesh):
     coords, faces, sphere = (x.copy() for x in mesh)
-    ov = VoronoiOverlap(coords, faces, sphere)
+    ov = VoronoiSurface(coords, faces, sphere)
     expected = [x.copy() for x in (coords, faces, sphere)]
     coords[:] = 0
     faces[:] = 0
@@ -79,7 +79,7 @@ def test_constructor_rejects_non_finite(mesh, name, value):
     kwargs = dict(zip(["coords", "faces", "sphere"], (x.copy() for x in mesh)))
     kwargs[name][3, 1] = value
     with pytest.raises(ValueError, match=f"{name} must contain only finite"):
-        VoronoiOverlap(**kwargs)
+        VoronoiSurface(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -91,15 +91,15 @@ def test_constructor_rejects_non_finite(mesh, name, value):
         (dict(faces=np.array([[0, 1, 30]])), "out of range"),
         (dict(faces=np.array([[0, 1, -1]])), "out of range"),
         (dict(sphere=np.zeros((29, 3))), "sphere must have the shape"),
-        (dict(n_div=0), "n_div must be a positive integer"),
-        (dict(t_div=2.0), "t_div must be a positive integer"),
+        (dict(edge_divisions=0), "edge_divisions must be a positive integer"),
+        (dict(sample_divisions=2.0), "sample_divisions must be a positive integer"),
     ],
 )
 def test_constructor_rejects_invalid(mesh, change, match):
     kwargs = dict(zip(["coords", "faces", "sphere"], mesh))
     kwargs.update(change)
     with pytest.raises(ValueError, match=match):
-        VoronoiOverlap(**kwargs)
+        VoronoiSurface(**kwargs)
 
 
 @pytest.fixture
@@ -111,14 +111,16 @@ def points():
 
 
 def _old_inputs(ov):
-    _, e_mapping, graph = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, graph = reference.subdivide_edges(
+        ov.coords, ov.faces, ov.edge_divisions
+    )
     return ov._node_coords, ov.faces, e_mapping, graph
 
 
 @pytest.mark.parametrize("n_div", [1, 2, 8])
 def test_native_labels(mesh, n_div):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces, n_div=n_div)
+    ov = VoronoiSurface(coords, faces, edge_divisions=n_div)
     assert ov._native is None
     point_set = ov._get("native")
     nn, nnd = reference.native_voronoi(*_old_inputs(ov))
@@ -134,7 +136,7 @@ def test_native_labels(mesh, n_div):
 @pytest.mark.parametrize("n_div", [1, 2, 8])
 def test_add_labels(mesh, points, n_div):
     coords, faces, sphere = mesh
-    ov = VoronoiOverlap(coords, faces, sphere, n_div=n_div)
+    ov = VoronoiSurface(coords, faces, sphere, edge_divisions=n_div)
     ov.add("points", points)
     point_set = ov._get("points")
     f_indices, weights = Sphere(sphere, faces).barycentric(
@@ -165,7 +167,7 @@ def test_add_labels(mesh, points, n_div):
 
 def test_add_warns_for_shared_faces(mesh):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces)
+    ov = VoronoiSurface(coords, faces)
     weights = np.full((3, 3), 1 / 3)
     with pytest.warns(UserWarning, match="3 template vertices are mapped to 2"):
         ov.add("a", f_indices=[0, 5, 0], weights=weights)
@@ -176,7 +178,7 @@ def test_add_warns_for_shared_faces(mesh):
 
 def test_add_copies_inputs(mesh):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces)
+    ov = VoronoiSurface(coords, faces)
     f_indices, weights = np.array([0, 5]), np.full((2, 3), 1 / 3)
     ov.add("a", f_indices=f_indices, weights=weights)
     expected = {k: v.copy() for k, v in vars(ov._get("a")).items() if k != "size"}
@@ -207,7 +209,7 @@ def test_add_copies_inputs(mesh):
 )
 def test_add_rejects_invalid(mesh, kwargs, match):
     coords, faces, sphere = mesh
-    ov = VoronoiOverlap(coords, faces, sphere)
+    ov = VoronoiSurface(coords, faces, sphere)
     ov.add("a", f_indices=[0], weights=[[1, 0, 0]])
     with pytest.raises(ValueError, match=match):
         ov.add(**kwargs)
@@ -219,21 +221,21 @@ def test_add_rejects_invalid(mesh, kwargs, match):
     [([[np.inf, 0, 0]], "coords must contain only finite"), ([1, 0, 0], "shape")],
 )
 def test_add_rejects_invalid_coords(mesh, coords, match):
-    ov = VoronoiOverlap(*mesh)
+    ov = VoronoiSurface(*mesh)
     with pytest.raises(ValueError, match=match):
         ov.add("a", coords)
 
 
 def test_add_requires_sphere(mesh, points):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces)
+    ov = VoronoiSurface(coords, faces)
     with pytest.raises(ValueError, match="requires sphere"):
         ov.add("a", points)
 
 
 def test_discard(mesh):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces)
+    ov = VoronoiSurface(coords, faces)
     ov.add("a", f_indices=[0], weights=[[1, 0, 0]])
     ov.add("b", f_indices=[1], weights=[[1, 0, 0]])
     ov.discard("a")
@@ -255,7 +257,7 @@ def test_discard(mesh):
 def _expected_samples(ov, name, f_indices=None, weights=None):
     """The sample labels of every face from compute_occupation."""
     point_set = ov._get(name)
-    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.edge_divisions)
     f_inv = {}
     if f_indices is not None:
         f_inv = reference.inverse_face_mapping(f_indices, weights, ov.coords, ov.faces)
@@ -298,7 +300,7 @@ def _sample_labels(ov, name):
 @pytest.mark.parametrize("n_points", [0, 5, 40])
 def test_sample_labels(mesh, n_div, t_div, n_points):
     coords, faces, sphere = mesh
-    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    ov = VoronoiSurface(coords, faces, edge_divisions=n_div, sample_divisions=t_div)
     name, placement = "native", {}
     if n_points:
         rng = np.random.default_rng(n_points)
@@ -324,7 +326,7 @@ def test_sample_labels_ties(n_div, t_div):
     """A flat, symmetric mesh where many scores tie exactly."""
     coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
     faces = np.array([[0, 1, 2], [1, 3, 2]])
-    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    ov = VoronoiSurface(coords, faces, edge_divisions=n_div, sample_divisions=t_div)
     # Points at vertex 1 and 2 of both faces, at the center of the square,
     # and a pair of points mirrored across the diagonal in face 0.
     f_indices = np.array([0, 1, 0, 1, 0, 0, 0])
@@ -352,7 +354,7 @@ def test_sample_labels_ties(n_div, t_div):
 def test_sample_labels_many_inside(mesh):
     """One face with more inside points than samples."""
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces, t_div=4)
+    ov = VoronoiSurface(coords, faces, sample_divisions=4)
     rng = np.random.default_rng(0)
     others = np.delete(np.arange(len(faces)), 3)
     f_indices = np.concatenate([np.full(300, 3), others])
@@ -387,7 +389,7 @@ def _assert_identical(mat, expected):
 
 def _reference(ov, placements, source, target):
     """The overlap from compute_overlap, with the labels of ``ov``."""
-    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.edge_divisions)
     args = []
     for name in (source, target):
         point_set = ov._get(name)
@@ -406,13 +408,13 @@ def _reference(ov, placements, source, target):
         *args[1],
         ov._get(source).size,
         ov._get(target).size,
-        t_div=ov.t_div,
+        t_div=ov.sample_divisions,
     )
 
 
 def _with_point_sets(mesh, n_div=8, t_div=4, sizes=(("few", 5), ("many", 40))):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
+    ov = VoronoiSurface(coords, faces, edge_divisions=n_div, sample_divisions=t_div)
     placements = {}
     for name, n in sizes:
         rng = np.random.default_rng(n)
@@ -457,7 +459,9 @@ def test_areas(mesh, n_div, t_div):
 def test_vertex_areas_nn(mesh, dtype, n_div, t_div):
     coords, faces, _ = mesh
     surf = Surface(coords.astype(dtype), faces)
-    ov = VoronoiOverlap(coords.astype(dtype), faces, n_div=n_div, t_div=t_div)
+    ov = VoronoiSurface(
+        coords.astype(dtype), faces, edge_divisions=n_div, sample_divisions=t_div
+    )
     areas = surf.vertex_areas_nn(n_div=n_div, t_div=t_div)
     np.testing.assert_array_equal(areas, ov.areas("native"))
     np.testing.assert_allclose(areas.sum(), surf.face_areas.sum())
@@ -613,7 +617,7 @@ def test_transform_large_labels(mesh):
 def test_transform_unreachable_faces(mesh):
     coords, faces, _ = mesh
     # A second copy of the mesh, not connected to the first.
-    ov = VoronoiOverlap(
+    ov = VoronoiSurface(
         np.concatenate([coords, coords + 10]),
         np.concatenate([faces, faces + len(coords)]),
     )
