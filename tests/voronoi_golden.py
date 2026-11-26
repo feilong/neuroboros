@@ -15,7 +15,6 @@ import os
 import platform
 import subprocess
 import sys
-import warnings
 from functools import lru_cache
 
 import numpy as np
@@ -224,9 +223,7 @@ def compute_class(case):
     for name in [case["source"], case["target"]]:
         if name not in ov.names:
             points = nb.geometry("sphere.reg", LR, name, vertices_only=True)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                ov.add(name, points)
+            ov.add(name, points)
     return ov.transform(case["source"], case["target"])
 
 

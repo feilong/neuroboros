@@ -23,7 +23,6 @@ import resource
 import subprocess
 import sys
 import time
-import warnings
 from collections import defaultdict
 
 import voronoi_golden as vg
@@ -77,9 +76,7 @@ def make_surface(coords, faces, sphere):
 
 
 def add_partition(surface, name, points):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        surface.add(name, points)
+    surface.add(name, points)
 
 
 def run_request(surface, request):

@@ -1,5 +1,3 @@
-import warnings
-
 import numpy as np
 import pytest
 import voronoi_reference as reference
@@ -165,15 +163,12 @@ def test_add_labels(mesh, points, n_div):
     assert ov.names == ("native", "points", "weights")
 
 
-def test_add_warns_for_shared_faces(mesh):
+def test_add_shared_faces_do_not_warn(mesh, recwarn):
+    """Several points in one face are supported and common."""
     coords, faces, _ = mesh
     ov = VoronoiSurface(coords, faces)
-    weights = np.full((3, 3), 1 / 3)
-    with pytest.warns(UserWarning, match="3 template vertices are mapped to 2"):
-        ov.add("a", f_indices=[0, 5, 0], weights=weights)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        ov.add("b", f_indices=[0, 5, 1], weights=weights)
+    ov.add("a", f_indices=[0, 5, 0], weights=np.full((3, 3), 1 / 3))
+    assert len(recwarn) == 0
 
 
 def test_add_copies_inputs(mesh):
@@ -294,7 +289,6 @@ def _sample_labels(ov, name):
     )
 
 
-@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
 @pytest.mark.parametrize("n_div", [1, 2, 8])
 @pytest.mark.parametrize("t_div", [1, 2, 8])
 @pytest.mark.parametrize("n_points", [0, 5, 40])
@@ -319,7 +313,6 @@ def test_sample_labels(mesh, n_div, t_div, n_points):
         assert 0 < is_single.sum() < len(faces)
 
 
-@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
 @pytest.mark.parametrize("n_div", [1, 2, 4])
 @pytest.mark.parametrize("t_div", [2, 4])
 def test_sample_labels_ties(n_div, t_div):
@@ -350,7 +343,6 @@ def test_sample_labels_ties(n_div, t_div):
         np.testing.assert_array_equal(_sample_labels(ov, name), expected)
 
 
-@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
 def test_sample_labels_many_inside(mesh):
     """One face with more inside points than samples."""
     coords, faces, _ = mesh
@@ -422,9 +414,7 @@ def _with_point_sets(mesh, n_div=8, t_div=4, sizes=(("few", 5), ("many", 40))):
             rng.integers(0, len(faces), n),
             rng.dirichlet(np.ones(3), n),
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ov.add(name, f_indices=placements[name][0], weights=placements[name][1])
+        ov.add(name, f_indices=placements[name][0], weights=placements[name][1])
     return ov, placements
 
 

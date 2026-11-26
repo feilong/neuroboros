@@ -647,7 +647,8 @@ class VoronoiSurface:
 
         Give either the coordinates of the points on the unit sphere (placed
         on ``sphere`` with ``Sphere.barycentric``), or the face that contains
-        each point and its barycentric weights.
+        each point and its barycentric weights. Any number of points can be
+        in the same face.
 
         Parameters
         ----------
@@ -695,12 +696,6 @@ class VoronoiSurface:
         ):
             raise ValueError("f_indices contain face indices out of range.")
         f_indices = f_indices.astype(np.intp, copy=False)
-
-        n_faces = len(np.unique(f_indices))
-        if n_faces != len(f_indices):
-            warnings.warn(
-                f"{len(f_indices)} template vertices are mapped to {n_faces} faces."
-            )
         self._point_sets[name] = self._label_points(f_indices, weights)
 
     def discard(self, name):
