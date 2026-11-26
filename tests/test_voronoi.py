@@ -3,6 +3,9 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.sparse as sparse
+import voronoi_reference as reference
+from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi, voronoi_legacy
 
@@ -126,6 +129,63 @@ def test_subdivided_graph_arrays(n_div):
         np.testing.assert_array_equal(indices, expected[1][tuple(e)])
     pairs = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]], axis=2)
     np.testing.assert_array_equal(edges[face_edge_ids], pairs)
+
+
+def _assert_equal_outputs(a, b):
+    """Assert that two outputs, or tuples of outputs, are exactly equal."""
+    if isinstance(a, tuple):
+        assert len(a) == len(b)
+        for x, y in zip(a, b):
+            _assert_equal_outputs(x, y)
+    elif sparse.issparse(a):
+        assert a.shape == b.shape and (a != b).nnz == 0
+    elif isinstance(a, dict):
+        assert list(a) == list(b)
+        for key in a:
+            np.testing.assert_array_equal(a[key], b[key])
+    else:
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("n_div, t_div", [(1, 1), (3, 4), (8, 8)])
+def test_deprecated_functions_match_reference(n_div, t_div):
+    """Every step agrees with the frozen copy in ``voronoi_reference.py``."""
+    rng = np.random.default_rng(0)
+    sphere = rng.standard_normal((20, 3))
+    sphere /= np.linalg.norm(sphere, axis=1, keepdims=True)
+    faces = ConvexHull(sphere).simplices
+    surf = Surface(sphere * rng.uniform(0.8, 1.2, (20, 1)), faces)
+    f_indices = rng.integers(0, len(faces), 30)
+    weights = rng.dirichlet(np.ones(3), 30)
+
+    def run(module):
+        new_coords, e_mapping, graph = module.subdivide_edges(surf.coords, faces, n_div)
+        coords = np.concatenate([surf.coords, new_coords])
+        nn, nnd = module.native_voronoi(coords, faces, e_mapping, graph)
+        with pytest.warns(UserWarning, match="template vertices are mapped"):
+            nn2, nnd2 = module.subdivision_voronoi(
+                coords, faces, e_mapping, graph, f_indices, weights
+            )
+        f_inv = module.inverse_face_mapping(f_indices, weights, coords, faces)
+        mat = module.compute_overlap(
+            faces,
+            surf.face_areas,
+            e_mapping,
+            coords,
+            nn,
+            nnd,
+            {},
+            nn2,
+            nnd2,
+            f_inv,
+            surf.nv,
+            len(f_indices),
+            t_div=t_div,
+        )
+        f_inv = {f: np.array([c for _, c in points]) for f, points in f_inv.items()}
+        return new_coords, e_mapping, graph, nn, nnd, nn2, nnd2, f_inv, mat
+
+    _assert_equal_outputs(run(voronoi), run(reference))
 
 
 DEPRECATED = [

@@ -2,15 +2,11 @@ import warnings
 
 import numpy as np
 import pytest
+import voronoi_reference as reference
 from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi
 from neuroboros.surface.voronoi import VoronoiOverlap
-
-# The deprecated functions keep their behaviour and serve as the reference.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:neuroboros.surface.voronoi:DeprecationWarning"
-)
 
 
 @pytest.fixture
@@ -30,7 +26,7 @@ def test_face_nodes_match_e_mapping(mesh, n_div):
     coords, faces, _ = mesh
     ov = VoronoiOverlap(coords, faces, n_div=n_div)
     assert ov._face_nodes.shape == (len(faces), 3 * n_div)
-    _, e_mapping, graph = voronoi.subdivide_edges(coords, faces, n_div)
+    _, e_mapping, graph = reference.subdivide_edges(coords, faces, n_div)
     for f, nodes in zip(faces, ov._face_nodes):
         a, b, c = sorted(f)
         expected = np.concatenate(
@@ -48,7 +44,7 @@ def test_constructor(mesh):
     assert ov.coords.dtype == np.float64
     np.testing.assert_array_equal(ov.coords, surf.coords)
     np.testing.assert_array_equal(ov.face_areas, surf.face_areas)
-    new_coords = voronoi.subdivide_edges(surf.coords, faces, 8)[0]
+    new_coords = reference.subdivide_edges(surf.coords, faces, 8)[0]
     np.testing.assert_array_equal(
         ov._node_coords, np.concatenate([surf.coords, new_coords])
     )
@@ -115,7 +111,7 @@ def points():
 
 
 def _old_inputs(ov):
-    _, e_mapping, graph = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, graph = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
     return ov._node_coords, ov.faces, e_mapping, graph
 
 
@@ -125,7 +121,7 @@ def test_native_labels(mesh, n_div):
     ov = VoronoiOverlap(coords, faces, n_div=n_div)
     assert ov._native is None
     point_set = ov._get("native")
-    nn, nnd = voronoi.native_voronoi(*_old_inputs(ov))
+    nn, nnd = reference.native_voronoi(*_old_inputs(ov))
     assert point_set.nn.dtype == np.int32
     np.testing.assert_array_equal(point_set.nn, nn)
     np.testing.assert_array_equal(point_set.nnd, nnd)
@@ -145,13 +141,13 @@ def test_add_labels(mesh, points, n_div):
         points, eps=1e-7, return_sparse=False
     )
     assert len(np.unique(f_indices)) < len(points)
-    nn, nnd = voronoi.subdivision_voronoi(*_old_inputs(ov), f_indices, weights)
+    nn, nnd = reference.subdivision_voronoi(*_old_inputs(ov), f_indices, weights)
     assert point_set.nn.dtype == np.int32
     np.testing.assert_array_equal(point_set.nn, nn)
     np.testing.assert_array_equal(point_set.nnd, nnd)
     assert point_set.size == len(points)
 
-    f_inv = voronoi.inverse_face_mapping(f_indices, weights, ov.coords, faces)
+    f_inv = reference.inverse_face_mapping(f_indices, weights, ov.coords, faces)
     for f in range(len(faces)):
         inside = slice(point_set.inside_ptr[f], point_set.inside_ptr[f + 1])
         expected = f_inv.get(f, [])
@@ -259,17 +255,17 @@ def test_discard(mesh):
 def _expected_samples(ov, name, f_indices=None, weights=None):
     """The sample labels of every face from compute_occupation."""
     point_set = ov._get(name)
-    _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
     f_inv = {}
     if f_indices is not None:
-        f_inv = voronoi.inverse_face_mapping(f_indices, weights, ov.coords, ov.faces)
+        f_inv = reference.inverse_face_mapping(f_indices, weights, ov.coords, ov.faces)
     expected = np.empty((len(ov.faces), len(ov._ww)), dtype=int)
     for f_idx, f in enumerate(ov.faces):
         a, b, c = sorted(f)
         indices = np.concatenate(
             [e_mapping[(a, b)], e_mapping[(a, c)], e_mapping[(b, c)], [a, b, c]]
         )
-        occupation = voronoi.compute_occupation(
+        occupation = reference.compute_occupation(
             f_idx,
             f,
             ov._node_coords,
@@ -404,7 +400,8 @@ def test_local_dtype(n_candidates, dtype):
 
 @pytest.mark.parametrize("t_div", [1, 2, 3, 32])
 def test_split_triangle(t_div):
-    ww = voronoi.split_triangle(t_div)
+    ww = voronoi._split_triangle(t_div)
+    np.testing.assert_array_equal(ww, reference.split_triangle(t_div))
     assert ww.shape == (t_div**2, 3)
     np.testing.assert_allclose(ww.sum(axis=1), 1)
     assert np.all(ww > 0)
@@ -426,15 +423,17 @@ def _assert_identical(mat, expected):
 
 def _reference(ov, placements, source, target):
     """The overlap from compute_overlap, with the labels of ``ov``."""
-    _, e_mapping, _ = voronoi.subdivide_edges(ov.coords, ov.faces, ov.n_div)
+    _, e_mapping, _ = reference.subdivide_edges(ov.coords, ov.faces, ov.n_div)
     args = []
     for name in (source, target):
         point_set = ov._get(name)
         f_inv = {}
         if name != "native":
-            f_inv = voronoi.inverse_face_mapping(*placements[name], ov.coords, ov.faces)
+            f_inv = reference.inverse_face_mapping(
+                *placements[name], ov.coords, ov.faces
+            )
         args.append((point_set.nn, point_set.nnd, f_inv))
-    return voronoi.compute_overlap(
+    return reference.compute_overlap(
         ov.faces,
         ov.face_areas,
         e_mapping,

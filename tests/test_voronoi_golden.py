@@ -5,11 +5,6 @@ import pytest
 import scipy.sparse as sparse
 import voronoi_golden as vg
 
-# The deprecated functions keep their behaviour and serve as the reference.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:neuroboros.surface.voronoi:DeprecationWarning"
-)
-
 SLOW = os.environ.get("NEUROBOROS_SLOW_TESTS") == "1"
 
 

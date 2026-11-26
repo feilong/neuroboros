@@ -1,8 +1,9 @@
 """Golden reference for the Voronoi overlap transforms.
 
-Running this file as a script computes every case with the current
-implementation and writes ``data/voronoi_golden.json``: the shape, sum and
-digest of each output, the environment, and the digests of the inputs.
+Running this file as a script computes every case with the frozen functions
+of ``voronoi_reference.py`` and writes ``data/voronoi_golden.json``: the
+shape, sum and digest of each output, the environment, and the digests of
+the inputs.
 Tied shortest paths may be resolved differently with other versions of
 Python or SciPy, so the digests are only valid in the recorded environment
 and with the recorded inputs.
@@ -20,11 +21,7 @@ from functools import lru_cache
 import numpy as np
 import scipy
 import scipy.sparse as sparse
-
-import neuroboros as nb
-from neuroboros.surface import Sphere, Surface
-from neuroboros.surface.voronoi import (
-    VoronoiOverlap,
+from voronoi_reference import (
     compute_occupation,
     compute_overlap,
     inverse_face_mapping,
@@ -33,6 +30,10 @@ from neuroboros.surface.voronoi import (
     subdivide_edges,
     subdivision_voronoi,
 )
+
+import neuroboros as nb
+from neuroboros.surface import Sphere, Surface
+from neuroboros.surface.voronoi import VoronoiOverlap
 
 GOLDEN_FN = os.path.join(os.path.dirname(__file__), "data", "voronoi_golden.json")
 LR = "l"
@@ -181,7 +182,7 @@ def _vertex_areas(native, n_div=8, t_div=32):
 
 
 def compute(case):
-    """Compute a case with the functions."""
+    """Compute a case with the reference functions."""
     if case["kind"] == "areas":
         return _vertex_areas(case["native"])
     native, n_div = case["native"], case["n_div"]
@@ -246,7 +247,6 @@ def load():
 
 
 def main():
-    warnings.filterwarnings("ignore", "neuroboros.surface.voronoi", DeprecationWarning)
     source = subprocess.run(
         ["git", "describe", "--always", "--dirty"],
         capture_output=True,
