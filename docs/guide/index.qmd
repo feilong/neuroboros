@@ -8,6 +8,7 @@ Start with [Installation](installation.qmd).
 - [Saving, loading, and caching results](io.qmd): `nb.save`, `nb.load`, and `nb.record`.
 - [HyperBrain functional templates](templates.qmd): `nb.tpl`.
 - [Connectivity hyperalignment using HyperBrain templates](hyperalignment.qmd): aligning a dataset to the template and evaluating it with ISC.
+- [Resampling between surface meshes by area overlap](voronoi.qmd): `VoronoiSurface` and `VoronoiPartition`.
 - [Parallel fitting and reproducibility](parallel.qmd): the `n_jobs` and `max_blas_threads` arguments of the searchlight fitters.
 
 More pages will be added here as the guide is written.

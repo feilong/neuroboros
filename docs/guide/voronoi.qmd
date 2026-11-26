@@ -1,0 +1,188 @@
+---
+title: "Resampling between surface meshes by area overlap"
+---
+
+Two meshes of the same cortical surface, such as a participant's native mesh and `onavg-ico32`, have different vertices.
+To move data from one mesh to the other, we need to know how much of the surface each vertex of one mesh shares with each vertex of the other.
+`VoronoiSurface` measures this on the participant's own anatomical surface.
+
+Each vertex owns the part of the surface that is closer to it than to any other vertex of its mesh, by geodesic distance.
+This part is the vertex's Voronoi cell, and the cells of one mesh form a *partition* of the surface.
+The overlap between a vertex of one mesh and a vertex of the other is the area that their two cells share.
+
+```python
+import neuroboros as nb
+from neuroboros.surface import VoronoiSurface
+
+# The mesh that the data are on. Here onavg-ico32 stands in for a native mesh.
+coords, faces = nb.geometry('midthickness', 'l', 'onavg-ico32')
+sphere = nb.geometry('sphere.reg', 'l', 'onavg-ico32', vertices_only=True)
+surface = VoronoiSurface(coords, faces, sphere)
+
+native = surface.native
+ico8 = surface.partition(nb.geometry('sphere.reg', 'l', 'onavg-ico8', vertices_only=True))
+
+T = native.overlap(ico8)
+T.shape  # (10242, 642)
+```
+
+`T` is a sparse matrix.
+`T[i, j]` is the area shared by the cell of native vertex `i` and the cell of `onavg-ico8` vertex `j`.
+
+
+## Surfaces and partitions
+
+A `VoronoiSurface` holds one triangle mesh.
+
+- `coords` and `faces` describe the surface on which distances and areas are measured, usually the midthickness.
+- `sphere` holds the coordinates of the same vertices on the registered sphere (`sphere.reg`).
+  It is needed only to place points that are given by their coordinates on the sphere.
+
+Creating the surface builds a graph for geodesic distances, which takes most of the memory (see [Memory](#memory)).
+The surface does not change afterwards.
+Another mesh needs another `VoronoiSurface`.
+
+A `VoronoiPartition` is the set of cells of some points on that surface.
+There are three ways to get one:
+
+```python
+# The vertices of the mesh itself.
+native = surface.native
+
+# Points given by their coordinates on the registered sphere,
+# such as the vertices of a template mesh.
+ico8 = surface.partition(ico8_sphere_coords)
+
+# Points that are already located on the mesh: the face that contains
+# each point, and its barycentric weights in that face.
+other = surface.partition(face_indices=face_indices, weights=weights)
+```
+
+Cell `i` of a partition belongs to point `i`, and `partition.n_cells` is the number of points.
+Any number of points can be in the same face.
+Every connected part of the mesh needs at least one point.
+
+
+## Overlaps and cell areas
+
+```python
+T = native.overlap(ico8)   # sparse matrix, (native.n_cells, ico8.n_cells)
+areas = ico8.areas()       # array, (ico8.n_cells,)
+```
+
+Both are areas on the surface, in the square of the unit of `coords` (mm² for coordinates in mm).
+
+- The entries of `T` add up to the area of the surface.
+- `ico8.overlap(native)` is the transpose of `native.overlap(ico8)`, exactly.
+- `native.areas()` is what `Surface.vertex_areas_nn()` returns.
+- The same inputs always give the same outputs on the same installation.
+  Exact ties are resolved by fixed rules: for example, a node of the distance graph that is equally far from two points belongs to the one with the lower index.
+
+Part of the work does not depend on the partitions: placing the samples of each face and measuring their distances to the boundary of the face.
+If you ask for several overlaps together, that part is done once for all of them:
+
+```python
+ico16 = surface.partition(ico16_sphere_coords)
+T8, T16, T_8_16 = surface.overlaps([(native, ico8), (native, ico16), (ico8, ico16)])
+```
+
+Each matrix is the same as the one that `overlap` returns for that pair.
+The rest of the work is not shared: the samples are labelled once for each distinct partition of the call, and the labels are counted once for each pair.
+Nothing is kept between calls, so two calls of `overlap` do the shared work twice and label each partition again.
+
+`overlaps`, `overlap` and `areas` take `n_jobs`, the number of threads to use: `1` (the default) for none, and `-1` for one for each CPU.
+The results do not depend on it.
+
+```python
+T8, T16 = surface.overlaps([(native, ico8), (native, ico16)], n_jobs=4)
+```
+
+
+## From overlaps to a resampling matrix
+
+The overlap matrix contains areas.
+How to normalize it depends on the data.
+
+For data that describe the surface at each point, such as fMRI responses or cortical thickness, each target vertex should get the *average* of the source values in its cell, weighted by area.
+Divide each column by the area of its target cell:
+
+```python
+import numpy as np
+import scipy.sparse as sparse
+
+T = native.overlap(ico8)
+target_areas = ico8.areas()
+weights = np.divide(1, target_areas, out=np.zeros_like(target_areas), where=target_areas > 0)
+to_ico8 = T @ sparse.diags(weights)   # each column sums to 1
+
+data_ico8 = data_native @ to_ico8     # (n_samples, 10242) -> (n_samples, 642)
+```
+
+For data that add up over the surface, such as the surface area of each vertex, each source value should be *distributed* over the target vertices, in proportion to the overlap.
+Divide each row by the area of its source cell:
+
+```python
+source_areas = native.areas()
+weights = np.divide(1, source_areas, out=np.zeros_like(source_areas), where=source_areas > 0)
+to_ico8_sum = sparse.diags(weights) @ T   # each row sums to 1
+```
+
+The `where` argument handles cells without area.
+A cell is empty if no sample of the surface is closest to its point, which can happen when points are much denser than the mesh.
+
+
+## Resolution
+
+The overlaps are approximations with two settings.
+
+- `edge_divisions` (default 8): each edge of the mesh is divided into this many segments, and geodesic distances are measured along paths through the division points.
+  More segments give more accurate distances.
+- `sample_divisions` (default 32): each face is sampled with `sample_divisions**2` points, and each sample belongs to the cell of its nearest point.
+  More samples give more accurate areas.
+
+The table shows the relative difference between the overlap matrix `T` of each setting and the matrix `R` of the finest setting tested (`edge_divisions=16`, `sample_divisions=64`), in percent: `abs(T - R).sum() / R.sum()`.
+The surface is the left hemisphere of `onavg-ico32`, and the overlap is between its own vertices and those of `onavg-ico8`.
+Area that moves from one entry of the matrix to another is counted twice, once where it leaves and once where it arrives, and changes inside one entry can cancel, so the figure is not the share of the surface that is assigned differently.
+
+| `edge_divisions` | `sample_divisions=8` | 16 | 32 | 64 |
+| --- | --- | --- | --- | --- |
+| 1 | 11.9 | 11.5 | 11.4 | 11.3 |
+| 2 | 4.6 | 4.0 | 3.8 | 3.8 |
+| 4 | 2.5 | 1.7 | 1.5 | 1.4 |
+| 8 | 1.9 | 0.8 | **0.5** | 0.4 |
+| 16 | 1.9 | 0.7 | 0.2 | reference |
+
+With the default setting, the difference is 0.5%.
+For a target as fine as the mesh itself (`onavg-ico32`), it is 0.2%.
+Both settings matter: more samples do not help when the distances are coarse, and the other way around.
+The time grows with both: in these runs, doubling `sample_divisions` took about four times as long, and doubling `edge_divisions` up to about twice as long.
+
+
+## Speed
+
+The samples are labelled by a compiled kernel, which is built when the package is installed if a C compiler is available.
+Without it, the same results are computed with NumPy, more slowly.
+In a checkout that is installed in editable mode, build the kernel with `python setup.py build_ext --inplace`.
+
+The times below are for one hemisphere of `onavg-ico128` and four overlaps: its own vertices with those of `onavg-ico32`, `onavg-ico64` and `onavg-ico128`, and `onavg-ico32` with `onavg-ico64`.
+They were measured on a laptop with an Apple M2, one run each.
+
+| | `n_jobs=1` | `n_jobs=8` |
+| --- | --- | --- |
+| One call of `overlaps` | 50 s | 34 s |
+| Four calls of `overlap` | 75 s | 38 s |
+| One call of `overlaps`, without the kernel | 125 s | |
+
+Creating the surface and the four partitions takes 28 s of each of these times, and does not use threads.
+
+
+## Memory {#memory}
+
+The distance graph takes most of the memory, and its size grows with the number of faces and with the square of `edge_divisions`.
+For one hemisphere of `onavg-ico128` (163,842 vertices) with the default setting, the graph takes 1.4 GB, and the four overlaps above take 3.3 GB at their peak.
+Each partition adds about 45 MB.
+
+- Create one surface for each mesh, and use it for all the partitions and overlaps that you need.
+- Ask for all overlaps of a surface in one call of `overlaps`.
+- Delete the surface and its partitions when you are done, before you create the next one.
+  A partition keeps its surface in memory.
