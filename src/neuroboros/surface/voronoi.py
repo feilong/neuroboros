@@ -890,6 +890,9 @@ class VoronoiSurface:
             raise ValueError("Give either coords or both face_indices and weights.")
 
         f_indices = np.array(f_indices)
+        if f_indices.size == 0:
+            # An empty list would be an array of floats.
+            f_indices = f_indices.astype(np.intp)
         weights = _finite_copy(weights, "weights")
         if f_indices.ndim != 1 or not np.issubdtype(f_indices.dtype, np.integer):
             raise ValueError("face_indices must be a 1-D array of integers.")
@@ -903,6 +906,8 @@ class VoronoiSurface:
             raise ValueError("face_indices contain face indices out of range.")
         f_indices = f_indices.astype(np.intp, copy=False)
         point_set = self._label_points(f_indices, weights)
+        if not np.all(np.isfinite(point_set.inside_coords)):
+            raise ValueError("weights give positions that are not finite.")
         if point_set.nn[self._face_nodes].min(initial=0) < 0:
             raise ValueError(
                 "Some faces cannot be reached from any point. Each connected "

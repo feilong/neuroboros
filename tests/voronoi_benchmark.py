@@ -11,6 +11,9 @@ the peak memory, and the digest of each output. Outputs with the same name
 must have the same digest in every workload and, unless a commit changes
 the results on purpose, across commits.
 
+With ``--n-jobs`` above 1, the times inside functions are added up over
+the threads, and they are approximate.
+
 With ``--record``, the results are appended to
 ``data/voronoi_benchmark.json``, with the environment and input digests.
 """
@@ -193,6 +196,7 @@ def describe(result):
     stages = ", ".join(f"{k} {v:.1f}" for k, v in sorted(result["stages"].items()))
     return (
         f"{result['total']:7.1f} s  {result['peak_memory_gb']:5.2f} GB  "
+        f"{'' if result['kernel'] else '(NumPy) '}"
         f"surface {result['steps']['surface']:.1f}, "
         f"partitions {result['steps']['partitions']:.1f}, requests {requests}"
         f"\n{'':15}[{stages}]"

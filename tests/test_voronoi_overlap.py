@@ -306,12 +306,21 @@ def test_partition_shared_faces_do_not_warn(mesh, recwarn):
         (dict(face_indices=[-1], weights=[[1, 0, 0]]), "out of range"),
         (dict(face_indices=[10**6], weights=[[1, 0, 0]]), "out of range"),
         (dict(face_indices=[0], weights=[[np.nan, 0, 0]]), "finite"),
+        (dict(face_indices=[], weights=np.zeros((0, 3))), "cannot be reached"),
     ],
 )
 def test_partition_rejects_invalid(mesh, kwargs, match):
     surface = VoronoiSurface(*mesh)
     with pytest.raises(ValueError, match=match):
         surface.partition(**kwargs)
+
+
+@pytest.mark.filterwarnings("ignore:overflow", "ignore:invalid value")
+def test_partition_rejects_overflowing_weights(mesh):
+    coords, faces, _ = mesh
+    surface = VoronoiSurface(coords + 10, faces)
+    with pytest.raises(ValueError, match="positions that are not finite"):
+        surface.partition(face_indices=[0], weights=[[1e308, 1e308, 1e308]])
 
 
 @pytest.mark.parametrize(
@@ -930,6 +939,22 @@ def test_empty_surface():
     overlap = native.overlap(native)
     assert overlap.shape == (0, 0)
     assert overlap.nnz == 0
+
+
+def test_empty_meshes(mesh):
+    """Without faces every cell is empty, and without vertices there is none."""
+    coords, _, _ = mesh
+    no_faces = np.zeros((0, 3), dtype=int)
+    for surface in (
+        VoronoiSurface(coords, no_faces),
+        VoronoiSurface(coords[:0], no_faces),
+    ):
+        native = surface.native
+        nothing = surface.partition(face_indices=[], weights=np.zeros((0, 3)))
+        np.testing.assert_array_equal(native.areas(), np.zeros(len(surface.coords)))
+        assert nothing.areas().shape == (0,)
+        mat = native.overlap(nothing)
+        assert mat.shape == (len(surface.coords), 0) and mat.nnz == 0
 
 
 def test_vertex_without_face(mesh):
