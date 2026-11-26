@@ -795,7 +795,9 @@ def test_pass_shares_distances(mesh, monkeypatch, labelling_path):
             calls.append(len(args[5]))
             return label_samples(*args)
 
-        kernel = types.SimpleNamespace(label_samples=counting)
+        kernel = types.SimpleNamespace(
+            label_samples=counting, count_labels=voronoi._kernel.count_labels
+        )
         monkeypatch.setattr(voronoi, "_kernel", kernel)
     else:
         boundary_distances = surface._boundary_distances

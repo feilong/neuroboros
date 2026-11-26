@@ -906,6 +906,11 @@ class VoronoiSurface:
                 if not rows.any():
                     chunk_parts.append(None)
                     continue
+                if kernel_arrays is not None:
+                    chunk_parts.append(
+                        self._kernel_counts(request, labels, face_indices, rows)
+                    )
+                    continue
                 sorted_keys = np.sort(
                     encode_labels(
                         request, [labels[partition][rows] for partition in request]
@@ -985,6 +990,26 @@ class VoronoiSurface:
             labels,
         )
         return dict(zip(partitions, labels))
+
+    def _kernel_counts(self, request, labels, face_indices, rows):
+        """Count the samples of the faces of ``rows`` by key, as the NumPy
+        code of ``_entries`` does, with the compiled kernel."""
+        capacity = np.count_nonzero(rows) * len(self._ww)
+        out = (
+            np.empty(capacity, dtype=np.intp),
+            np.empty(capacity, dtype=np.int64),
+            np.empty(capacity, dtype=np.int64),
+        )
+        n_entries = _kernel.count_labels(
+            labels[request[0]],
+            labels[request[1]] if len(request) == 2 else None,
+            request[-1].n_cells,
+            face_indices,
+            rows,
+            *out,
+        )
+        # Copies, so that the buffers are released.
+        return tuple(array[:n_entries].copy() for array in out)
 
     def _kernel_arrays(self, partitions, single):
         """Stack the arrays of the partitions for ``_kernel.label_samples``.

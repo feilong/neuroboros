@@ -42,8 +42,9 @@ multiply_add(PyObject *self, PyObject *args)
 }
 
 /* Fill ``view`` with the C-contiguous buffer of ``obj`` and check that it
- * holds floats (kind 'f') or signed integers (kind 'i') of the given size,
- * with the given number of dimensions. Return 0, or -1 with an exception.
+ * holds floats (kind 'f'), signed integers (kind 'i') or booleans (kind 'b')
+ * of the given size, with the given number of dimensions. Return 0, or -1
+ * with an exception.
  */
 static int
 get_array(PyObject *obj, Py_buffer *view, const char *name, char kind,
@@ -63,10 +64,13 @@ get_array(PyObject *obj, Py_buffer *view, const char *name, char kind,
         format++;
     }
     if (view->ndim != ndim || view->itemsize != itemsize || format[1] != '\0'
-            || !strchr(kind == 'f' ? "d" : "ilqn", format[0])) {
+            || !strchr(kind == 'f' ? "d" : kind == 'b' ? "?" : "ilqn",
+                       format[0])) {
         PyErr_Format(PyExc_TypeError,
                      "%s must be a %d-D array of %d-byte %s.", name, ndim,
-                     (int)itemsize, kind == 'f' ? "floats" : "integers");
+                     (int)itemsize,
+                     kind == 'f' ? "floats" : kind == 'b' ? "booleans"
+                                                         : "integers");
         PyBuffer_Release(view);
         return -1;
     }
@@ -367,9 +371,219 @@ fail:
     return NULL;
 }
 
+static int
+compare_keys(const void *a, const void *b)
+{
+    const int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+
+    return (x > y) - (x < y);
+}
+
+/* The keys of the samples of one face, as distinct keys in increasing order
+ * and the number of samples with each. ``keys`` is used as scratch space.
+ * Return the number of distinct keys.
+ */
+static Py_ssize_t
+count_face_keys(int64_t *keys, Py_ssize_t n_samples, int64_t *out_keys,
+                int64_t *out_counts)
+{
+    /* Most faces have a few distinct keys, in long runs of samples. */
+    enum { N_SMALL = 32 };
+    Py_ssize_t n = 0, s, i, j;
+
+    for (s = 0; s < n_samples; s++) {
+        const int64_t key = keys[s];
+
+        /* The key of the previous sample is the most likely one. */
+        for (i = n - 1; i >= 0 && out_keys[i] != key; i--) {
+        }
+        if (i >= 0) {
+            out_counts[i]++;
+            if (i != n - 1) {
+                /* Move it to the end, where the next sample looks first. */
+                const int64_t count = out_counts[i];
+
+                out_keys[i] = out_keys[n - 1];
+                out_counts[i] = out_counts[n - 1];
+                out_keys[n - 1] = key;
+                out_counts[n - 1] = count;
+            }
+        }
+        else if (n < N_SMALL) {
+            out_keys[n] = key;
+            out_counts[n] = 1;
+            n++;
+        }
+        else {
+            /* Too many distinct keys for this search: sort all of them. */
+            qsort(keys, n_samples, sizeof(int64_t), compare_keys);
+            n = 0;
+            for (s = 0; s < n_samples; s++) {
+                if (n > 0 && out_keys[n - 1] == keys[s]) {
+                    out_counts[n - 1]++;
+                }
+                else {
+                    out_keys[n] = keys[s];
+                    out_counts[n] = 1;
+                    n++;
+                }
+            }
+            return n;
+        }
+    }
+    /* Sort the distinct keys by insertion. */
+    for (i = 1; i < n; i++) {
+        const int64_t key = out_keys[i], count = out_counts[i];
+
+        for (j = i; j > 0 && out_keys[j - 1] > key; j--) {
+            out_keys[j] = out_keys[j - 1];
+            out_counts[j] = out_counts[j - 1];
+        }
+        out_keys[j] = key;
+        out_counts[j] = count;
+    }
+    return n;
+}
+
+PyDoc_STRVAR(count_labels_doc,
+"count_labels(first, second, n_second, face_indices, selected,\n"
+"             out_faces, out_keys, out_counts)\n--\n\n"
+"Count the samples of each face by their labels in one or two partitions.\n\n"
+"``first[i, s]`` and ``second[i, s]`` are the labels of sample ``s`` of\n"
+"face ``face_indices[i]``. Its key is ``first[i, s] * n_second +\n"
+"second[i, s]``, or ``first[i, s]`` if ``second`` is None. For each face\n"
+"with ``selected[i]``, in order, and for each of its distinct keys, in\n"
+"increasing order, one entry is written: the face index, the key and the\n"
+"number of samples with that key. Return the number of entries.\n\n"
+"``first`` and ``second`` are C-contiguous int32 arrays of shape (k,\n"
+"n_samples), ``face_indices`` has integers of the size of a pointer, and\n"
+"``selected`` has booleans. The outputs are 1-D arrays with room for\n"
+"``n_samples`` entries for each selected face: ``out_faces`` like\n"
+"``face_indices``, and ``out_keys`` and ``out_counts`` of int64.");
+
+static PyObject *
+count_labels(PyObject *self, PyObject *args)
+{
+    PyObject *objects[7];
+    Py_buffer views[7];
+    static const char *names[7] = {"first", "second", "face_indices",
+                                   "selected", "out_faces", "out_keys",
+                                   "out_counts"};
+    static const char kinds[8] = "iiibiii";
+    static const int ndims[7] = {2, 2, 1, 1, 1, 1, 1};
+    static const int sizes[7] = {4, 4, 0, 1, 0, 8, 8};
+    long long n_second;
+    Py_ssize_t n_faces, n_samples, n_selected = 0, n_entries = 0, i, s;
+    const int32_t *first, *second = NULL;
+    const Py_ssize_t *face_indices;
+    const char *selected;
+    Py_ssize_t *out_faces;
+    int64_t *out_keys, *out_counts, *keys = NULL;
+    int has_second, n_views = 0, v, failed = 0;
+
+    if (!PyArg_ParseTuple(args, "OOLOOOOO", &objects[0], &objects[1],
+                          &n_second, &objects[2], &objects[3], &objects[4],
+                          &objects[5], &objects[6])) {
+        return NULL;
+    }
+    has_second = objects[1] != Py_None;
+    for (v = 0; v < 7; v++) {
+        const Py_ssize_t size = sizes[v] ? sizes[v] : (int)sizeof(Py_ssize_t);
+
+        if (v == 1 && !has_second) {
+            views[v].obj = NULL;
+            n_views++;
+            continue;
+        }
+        if (get_array(objects[v], &views[v], names[v], kinds[v], size,
+                      ndims[v], v >= 4) < 0) {
+            goto fail;
+        }
+        n_views++;
+    }
+
+    n_faces = views[0].shape[0];
+    n_samples = views[0].shape[1];
+    first = views[0].buf;
+    if (has_second) {
+        second = views[1].buf;
+    }
+    face_indices = views[2].buf;
+    selected = views[3].buf;
+    out_faces = views[4].buf;
+    out_keys = views[5].buf;
+    out_counts = views[6].buf;
+    for (i = 0; i < (views[3].shape[0] == n_faces ? n_faces : 0); i++) {
+        n_selected += selected[i] != 0;
+    }
+    if ((has_second && (views[1].shape[0] != n_faces
+                        || views[1].shape[1] != n_samples))
+            || views[2].shape[0] != n_faces || views[3].shape[0] != n_faces
+            || views[4].shape[0] < n_selected * n_samples
+            || views[5].shape[0] < n_selected * n_samples
+            || views[6].shape[0] < n_selected * n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+                        "The shapes of the arrays do not match.");
+        goto fail;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+    keys = malloc((n_samples > 0 ? n_samples : 1) * sizeof(int64_t));
+    if (keys == NULL) {
+        failed = 1;
+    }
+    for (i = 0; i < n_faces && !failed; i++) {
+        const int32_t *a = first + i * n_samples;
+        Py_ssize_t n, j;
+
+        if (!selected[i]) {
+            continue;
+        }
+        if (has_second) {
+            const int32_t *b = second + i * n_samples;
+
+            for (s = 0; s < n_samples; s++) {
+                keys[s] = (int64_t)a[s] * n_second + b[s];
+            }
+        }
+        else {
+            for (s = 0; s < n_samples; s++) {
+                keys[s] = a[s];
+            }
+        }
+        n = count_face_keys(keys, n_samples, out_keys + n_entries,
+                            out_counts + n_entries);
+        for (j = 0; j < n; j++) {
+            out_faces[n_entries + j] = face_indices[i];
+        }
+        n_entries += n;
+    }
+    free(keys);
+    Py_END_ALLOW_THREADS
+    if (failed) {
+        PyErr_NoMemory();
+        goto fail;
+    }
+    for (v = 0; v < n_views; v++) {
+        if (views[v].obj != NULL) {
+            PyBuffer_Release(&views[v]);
+        }
+    }
+    return PyLong_FromSsize_t(n_entries);
+
+fail:
+    for (v = 0; v < n_views; v++) {
+        if (views[v].obj != NULL) {
+            PyBuffer_Release(&views[v]);
+        }
+    }
+    return NULL;
+}
+
 static PyMethodDef kernel_methods[] = {
     {"multiply_add", multiply_add, METH_VARARGS, multiply_add_doc},
     {"label_samples", label_samples, METH_VARARGS, label_samples_doc},
+    {"count_labels", count_labels, METH_VARARGS, count_labels_doc},
     {NULL, NULL, 0, NULL},
 };
 

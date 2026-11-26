@@ -255,3 +255,88 @@ def test_label_samples_rejects_invalid(mesh):
     # The valid call still gives the same labels.
     kernel.label_samples(*args)
     np.testing.assert_array_equal(args[-1], expected)
+
+
+def _numpy_counts(first, second, n_second, face_indices, selected):
+    """The entries as the NumPy code of ``VoronoiSurface._entries`` counts them."""
+    keys = first[selected].astype(np.int64)
+    if second is not None:
+        keys = keys * n_second + second[selected]
+    keys = np.sort(keys, axis=1)
+    is_run_start = np.ones(keys.shape, dtype=bool)
+    is_run_start[:, 1:] = keys[:, 1:] != keys[:, :-1]
+    run_starts = np.flatnonzero(is_run_start)
+    return (
+        face_indices[selected][run_starts // max(keys.shape[1], 1)],
+        keys.ravel()[run_starts],
+        np.diff(run_starts, append=keys.size),
+    )
+
+
+def _kernel_counts(first, second, n_second, face_indices, selected, extra=0):
+    kernel = pytest.importorskip(MODULE)
+    capacity = np.count_nonzero(selected) * first.shape[1] + extra
+    out = (
+        np.full(capacity, -7, dtype=np.intp),
+        np.full(capacity, -7, dtype=np.int64),
+        np.full(capacity, -7, dtype=np.int64),
+    )
+    n = kernel.count_labels(first, second, n_second, face_indices, selected, *out)
+    for array in out:
+        # Nothing is written after the entries.
+        assert np.all(array[n:] == -7)
+    return tuple(array[:n] for array in out)
+
+
+@pytest.mark.parametrize("n_samples", [1, 4, 64, 1024])
+@pytest.mark.parametrize("n_labels", [1, 3, 31, 33, 70000])
+def test_count_labels(n_samples, n_labels):
+    rng = np.random.default_rng(n_samples + n_labels)
+    k = 20
+    # Labels in runs, as on a face, and scattered labels.
+    first = np.repeat(rng.integers(0, n_labels, (k, 4)), -(-n_samples // 4), axis=1)
+    first = first[:, :n_samples].astype(np.int32)
+    second = rng.integers(0, n_labels, (k, n_samples)).astype(np.int32)
+    face_indices = rng.permutation(1000)[:k]
+    for selected in [np.ones(k, bool), rng.random(k) < 0.5, np.zeros(k, bool)]:
+        for a, b in [(first, None), (second, None), (first, second), (second, second)]:
+            expected = _numpy_counts(a, b, n_labels, face_indices, selected)
+            counts = _kernel_counts(a, b, n_labels, face_indices, selected, extra=3)
+            for x, y in zip(counts, expected):
+                assert x.dtype == y.dtype
+                np.testing.assert_array_equal(x, y)
+            assert counts[2].sum() == np.count_nonzero(selected) * n_samples
+            if n_labels == 70000 and b is not None and selected.all():
+                # The keys of pairs do not fit in 32 bits.
+                assert expected[1].max() > np.iinfo(np.int32).max
+
+
+def test_count_labels_rejects_invalid():
+    kernel = pytest.importorskip(MODULE)
+    first = np.zeros((3, 4), dtype=np.int32)
+    selected = np.ones(3, dtype=bool)
+    faces = np.arange(3)
+    out = [np.empty(12, dtype=np.intp), np.empty(12, np.int64), np.empty(12, np.int64)]
+    assert kernel.count_labels(first, None, 1, faces, selected, *out) == 3
+    assert kernel.count_labels(first, first, 5, faces, selected, *out) == 3
+    with pytest.raises(TypeError):
+        kernel.count_labels(first.astype(np.int64), None, 1, faces, selected, *out)
+    with pytest.raises(TypeError):
+        kernel.count_labels(first, None, 1, faces, selected.astype(np.int8), *out)
+    with pytest.raises(TypeError):
+        kernel.count_labels(first, first[0], 1, faces, selected, *out)
+    for args in [
+        (first, first[:2], 1, faces, selected, *out),
+        (first, None, 1, faces[:2], selected, *out),
+        (first, None, 1, faces, selected[:2], *out),
+        (first, None, 1, faces, selected, out[0][:11], out[1], out[2]),
+        (first, None, 1, faces, selected, out[0], out[1][:11], out[2]),
+        (first, None, 1, faces, selected, out[0], out[1], out[2][:11]),
+    ]:
+        with pytest.raises(ValueError, match="shapes"):
+            kernel.count_labels(*args)
+    # Room for the selected faces is enough.
+    selected[1] = False
+    assert (
+        kernel.count_labels(first, None, 1, faces, selected, *[x[:8] for x in out]) == 2
+    )
