@@ -1,4 +1,5 @@
 import gc
+import pickle
 import types
 import weakref
 
@@ -958,6 +959,33 @@ def test_native_partition(mesh):
             setattr(native, attribute, None)
     with pytest.raises(AttributeError):
         native.name = "native"
+
+
+@pytest.mark.parametrize("with_native", [False, True])
+def test_pickle(mesh, points, with_native):
+    """A surface and its partitions can be sent to another process."""
+    surface = VoronoiSurface(*mesh, sample_divisions=4)
+    partition = surface.partition(points)
+    if with_native:
+        # The surface then refers weakly to its native partition.
+        native = surface.native
+        assert native is surface.native
+    surface2, partition2 = pickle.loads(pickle.dumps((surface, partition)))
+    assert partition2.surface is surface2
+    assert (surface2._native is None) == (not with_native)
+    expected = surface.native.overlap(partition)
+    _assert_identical(surface2.native.overlap(partition2), expected)
+    _assert_identical(surface2.native.overlap(surface2.partition(points)), expected)
+    # The arrays are read-only again.
+    for array in (surface2.coords, surface2.faces, surface2.sphere):
+        with pytest.raises(ValueError, match="read-only"):
+            array[0] = 0
+    assert not partition2._point_set.nn.flags.writeable
+
+    native2 = pickle.loads(pickle.dumps(surface.native))
+    assert native2._point_set is native2.surface._native
+    _assert_identical(native2.overlap(native2.surface.native), native2.overlap(native2))
+    np.testing.assert_array_equal(native2.areas(), surface.native.areas())
 
 
 def test_surface_is_released_with_its_partitions(mesh):

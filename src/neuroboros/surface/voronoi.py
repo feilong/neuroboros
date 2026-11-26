@@ -760,9 +760,7 @@ class VoronoiSurface:
         self._edge_divisions = int(edge_divisions)
         self._sample_divisions = int(sample_divisions)
         self._face_areas = compute_face_areas(coords, faces)
-        for array in (self._coords, self._faces, self._sphere, self._face_areas):
-            if array is not None:
-                array.flags.writeable = False
+        self._freeze()
         # Barycentric sample coordinates.
         self._ww = _split_triangle(self.sample_divisions)
 
@@ -781,6 +779,23 @@ class VoronoiSurface:
             f"<VoronoiSurface with {len(self.coords)} vertices and "
             f"{len(self.faces)} faces>"
         )
+
+    def _freeze(self):
+        for array in (self._coords, self._faces, self._sphere, self._face_areas):
+            if array is not None:
+                array.flags.writeable = False
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # A weak reference cannot be pickled, and the object that places
+        # points on the sphere is built again when it is needed.
+        state["_native_partition"] = state["_placement"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Pickling does not keep arrays read-only.
+        self._freeze()
 
     @property
     def coords(self):
@@ -1412,6 +1427,14 @@ class _PointSet:
     inside_coords: np.ndarray
 
     def __post_init__(self):
+        self._freeze()
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Pickling does not keep arrays read-only.
+        self._freeze()
+
+    def _freeze(self):
         # A partition does not change.
         for value in vars(self).values():
             if isinstance(value, np.ndarray):
