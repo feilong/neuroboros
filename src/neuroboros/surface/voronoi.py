@@ -584,17 +584,9 @@ class VoronoiOverlap:
         The number of segments to divide each edge into for the graph.
     t_div : int
         Each face is sampled with ``t_div**2`` points.
-    cache_samples : bool
-        Whether to keep the sample labels of each point set once computed
-        (about 1 byte per sample of each face). Without the cache, every
-        ``transforms``, ``transform`` and ``areas`` call labels the samples
-        again. In both cases, the point sets that are labelled in the same
-        call share the sample distances.
     """
 
-    def __init__(
-        self, coords, faces, sphere=None, n_div=8, t_div=32, cache_samples=True
-    ):
+    def __init__(self, coords, faces, sphere=None, n_div=8, t_div=32):
         coords = _finite_copy(coords, "coords")
         faces = np.array(faces)
         if coords.ndim != 2 or coords.shape[1] != 3:
@@ -624,7 +616,6 @@ class VoronoiOverlap:
         self.sphere = sphere
         self.n_div = int(n_div)
         self.t_div = int(t_div)
-        self.cache_samples = bool(cache_samples)
         self.face_areas = compute_face_areas(coords, faces)
         self._ww = _split_triangle(self.t_div)  # Barycentric sample coordinates.
 
@@ -637,7 +628,6 @@ class VoronoiOverlap:
         self._native = None
         self._point_sets = {}
         self._placement = None
-        self._sample_labels_cache = {}
 
     @property
     def names(self):
@@ -716,27 +706,14 @@ class VoronoiOverlap:
         else:
             self._get(name)
             del self._point_sets[name]
-        self._sample_labels_cache.pop(name, None)
-
-    def clear_cache(self, name=None):
-        """Release the cached sample labels of a point set, or of all point
-        sets if ``name`` is None.
-
-        Node labels are kept. Sample labels are computed again when needed.
-        """
-        if name is None:
-            self._sample_labels_cache.clear()
-        elif name in self.names:
-            self._sample_labels_cache.pop(name, None)
-        else:
-            raise KeyError(f"No point set named {name!r}.")
 
     def transforms(self, pairs):
         """Overlap areas for several pairs of point sets.
 
         All pairs are computed in one pass over the faces, and the point sets
         share the work that does not depend on them. Each matrix is the one
-        that ``transform`` returns for that pair.
+        that ``transform`` returns for that pair. The samples are labelled
+        again in every call, so it is faster to ask for all pairs at once.
 
         Parameters
         ----------
@@ -831,15 +808,13 @@ class VoronoiOverlap:
         are sorted by face, so that ``np.add.at`` adds the areas of each key
         in face order, as the in-place additions of ``compute_overlap`` do.
 
-        All requests are served by one pass over the faces. The point sets
-        that are labelled in this pass use the same sample distances.
+        All requests are served by one pass over the faces, and the point
+        sets use the same sample distances.
         """
         names = list(dict.fromkeys(name for request in requests for name in request))
         point_sets = {name: self._get(name) for name in names}
-        sample_labels = {name: self._get_sample_labels(name) for name in names}
-        # The point sets without cached labels are labelled in this pass.
-        new = [name for name in names if name not in self._sample_labels_cache]
-        is_mixed = {name: sample_labels[name].single < 0 for name in names}
+        single = {name: self._single_labels(point_sets[name]) for name in names}
+        is_mixed = {name: single[name] < 0 for name in names}
         n_samples = len(self._ww)
 
         def encode_labels(request, labels):
@@ -856,7 +831,7 @@ class VoronoiOverlap:
             is_single = ~np.logical_or.reduce([is_mixed[name] for name in request])
             single_faces = np.flatnonzero(is_single)
             keys = encode_labels(
-                request, [sample_labels[name].single[single_faces] for name in request]
+                request, [single[name][single_faces] for name in request]
             )
             counts = np.full(len(single_faces), n_samples)
             parts.append(([single_faces], [keys], [counts]))
@@ -867,22 +842,10 @@ class VoronoiOverlap:
         visited_faces = np.flatnonzero(any_mixed)
         for start in range(0, len(visited_faces), chunk_size):
             face_indices = visited_faces[start : start + chunk_size]
-            # Distances are needed for the faces that are labelled now.
-            labelled = np.zeros(len(face_indices), dtype=bool)
-            for name in new:
-                labelled |= is_mixed[name][face_indices]
-            boundary = None
-            if labelled.any():
-                boundary = (
-                    np.cumsum(labelled) - 1,
-                    *self._boundary_distances(face_indices[labelled]),
-                )
+            boundary = self._boundary_distances(face_indices)
             labels = {
                 name: self._face_labels(
-                    point_sets[name],
-                    sample_labels[name],
-                    face_indices,
-                    boundary if name in new else None,
+                    point_sets[name], single[name], face_indices, *boundary
                 )
                 for name in names
             }
@@ -908,10 +871,6 @@ class VoronoiOverlap:
                 key_parts.append(sorted_keys.ravel()[run_starts])
                 count_parts.append(np.diff(run_starts, append=sorted_keys.size))
 
-        if self.cache_samples:
-            for name in new:
-                self._sample_labels_cache[name] = sample_labels[name]
-
         # Merge single and mixed faces back into face order. Keep every face's
         # contribution separate so chunk boundaries cannot change rounding.
         entries = []
@@ -924,46 +883,24 @@ class VoronoiOverlap:
             entries.append((faces, keys, counts / n_samples * self.face_areas[faces]))
         return entries
 
-    def _face_labels(self, point_set, sample_labels, face_indices, boundary=None):
+    def _face_labels(self, point_set, single, face_indices, samples, distances):
         """Return the labels of the samples of the faces.
 
-        The result has shape (len(face_indices), n_samples). Without
-        ``boundary``, the labels of the mixed faces are read from
-        ``sample_labels.local``. With ``boundary``, they are computed here,
-        and stored in ``sample_labels.local`` unless it is None. ``boundary``
-        has the row of each face in the arrays that follow (only used for
-        the mixed faces), and the output of ``_boundary_distances`` for
-        those rows.
+        The result has shape (len(face_indices), n_samples). ``single`` is
+        the output of ``_single_labels``, and ``samples`` and ``distances``
+        are the output of ``_boundary_distances(face_indices)``.
         """
-        decoded = np.repeat(
-            sample_labels.single[face_indices, np.newaxis], len(self._ww), axis=1
-        )
-        is_mixed = sample_labels.single[face_indices] < 0
+        labels = np.repeat(single[face_indices, np.newaxis], len(self._ww), axis=1)
+        is_mixed = single[face_indices] < 0
         if not is_mixed.any():
-            return decoded
+            return labels
         mixed_indices = face_indices[is_mixed]
-        if boundary is None or sample_labels.local is not None:
-            cache_rows = np.searchsorted(sample_labels.mixed_faces, mixed_indices)
-        if boundary is None:
-            local = sample_labels.local[cache_rows]
-        else:
-            rows, samples, distances = boundary
-            rows = rows[is_mixed]
-            # Rows are increasing, so they are all rows if as many.
-            if len(rows) < len(samples):
-                samples, distances = samples[rows], distances[rows]
-            local = self._local_labels(point_set, mixed_indices, samples, distances)
-            if sample_labels.local is not None:
-                sample_labels.local[cache_rows] = local
-        decoded[is_mixed] = self._decode(point_set, mixed_indices, local)
-        return decoded
-
-    def _get_sample_labels(self, name):
-        """Return the cached sample labels of a point set, or new ones that
-        the pass of ``_entries`` fills in."""
-        if name in self._sample_labels_cache:
-            return self._sample_labels_cache[name]
-        return self._sample_labels(self._get(name))
+        # Do not copy the arrays if every face is mixed.
+        if len(mixed_indices) < len(face_indices):
+            samples, distances = samples[is_mixed], distances[is_mixed]
+        local = self._local_labels(point_set, mixed_indices, samples, distances)
+        labels[is_mixed] = self._decode(point_set, mixed_indices, local)
+        return labels
 
     def _get(self, name):
         """Return the labels of a point set, labelling ``"native"`` if needed."""
@@ -1046,34 +983,25 @@ class VoronoiOverlap:
             inside_coords=positions[order],
         )
 
-    def _sample_labels(self, point_set):
-        """Find the faces whose samples all have the same label.
+    def _single_labels(self, point_set):
+        """Return the label of each face whose samples all have the same
+        label, and -1 for the other (mixed) faces.
 
         A face whose boundary nodes all have the same label, and that has no
-        point inside, takes that label (``single``). For the other faces
-        (``mixed_faces``), the pass of ``_entries`` finds each sample's
-        nearest candidate. Candidates are the face's boundary nodes in
-        ``_face_nodes`` order, followed by its inside points in index order.
-        With ``cache_samples``, ``local`` is an empty array for the indices
-        of those candidates; otherwise it is None.
+        point inside, takes that label. In a mixed face, each sample takes
+        the label of its nearest candidate. Candidates are the face's
+        boundary nodes in ``_face_nodes`` order, followed by its inside
+        points in index order.
         """
-        n_boundary = self._face_nodes.shape[1]
         boundary_labels = point_set.nn[self._face_nodes]
         if np.any(boundary_labels < 0):
             raise ValueError(
                 "Some faces cannot be reached from any point. Each connected "
                 "part of the mesh needs at least one point."
             )
-        inside_counts = np.diff(point_set.inside_ptr)
         is_single = np.all(boundary_labels == boundary_labels[:, :1], axis=1)
-        is_single &= inside_counts == 0
-        single = np.where(is_single, boundary_labels[:, 0], -1).astype(np.int32)
-        mixed_faces = np.flatnonzero(~is_single)
-        local = None
-        if self.cache_samples:
-            dtype = _local_dtype(n_boundary + inside_counts.max(initial=0))
-            local = np.empty((len(mixed_faces), len(self._ww)), dtype=dtype)
-        return _SampleLabels(single=single, mixed_faces=mixed_faces, local=local)
+        is_single &= np.diff(point_set.inside_ptr) == 0
+        return np.where(is_single, boundary_labels[:, 0], -1).astype(np.int32)
 
     def _boundary_distances(self, face_indices):
         """Return sample coordinates and distances to each face's boundary nodes.
@@ -1124,8 +1052,6 @@ class VoronoiOverlap:
         ``local`` and the result have shape (len(face_indices), n_samples).
         """
         n_boundary = self._face_nodes.shape[1]
-        # Widen compact unsigned indices before computing array offsets.
-        local = local.astype(np.intp)
         sample_faces = np.broadcast_to(face_indices[:, np.newaxis], local.shape)
         decoded = np.empty(local.shape, dtype=np.int32)
         on_boundary = local < n_boundary
@@ -1137,21 +1063,6 @@ class VoronoiOverlap:
             point_set.inside_ptr[sample_faces[inside]] + local[inside] - n_boundary
         ]
         return decoded
-
-
-@dataclass
-class _SampleLabels:
-    """The labels of the samples of each face for one point set.
-
-    For faces outside ``mixed_faces``, ``single[f]`` is the label of every
-    sample. For mixed faces, ``single`` is -1 and unused; ``local[i]`` holds
-    the candidate index of each sample of ``mixed_faces[i]``, or ``local``
-    is None if the indices are not kept.
-    """
-
-    single: np.ndarray
-    mixed_faces: np.ndarray
-    local: np.ndarray
 
 
 @dataclass
@@ -1169,17 +1080,6 @@ class _PointSet:
     inside_ptr: np.ndarray
     inside_labels: np.ndarray
     inside_coords: np.ndarray
-
-
-def _local_dtype(n_candidates):
-    """Choose uint8 or uint16 for indices from 0 to n_candidates - 1."""
-    if n_candidates <= 256:
-        return np.uint8
-    if n_candidates <= 65536:
-        return np.uint16
-    raise ValueError(
-        f"{n_candidates} candidates in one face exceed the limit of 65536."
-    )
 
 
 def _finite_copy(x, name):

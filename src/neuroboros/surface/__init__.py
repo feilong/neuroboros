@@ -66,12 +66,9 @@ class Surface:
     def vertex_areas_nn(self, n_div=8, t_div=32):
         """The area of the geodesic Voronoi cell of each vertex.
 
-        See ``VoronoiOverlap.areas``. Sample labels are not cached, because
-        they are used only once.
+        See ``VoronoiOverlap.areas``.
         """
-        ov = VoronoiOverlap(
-            self.coords, self.faces, n_div=n_div, t_div=t_div, cache_samples=False
-        )
+        ov = VoronoiOverlap(self.coords, self.faces, n_div=n_div, t_div=t_div)
         return ov.areas("native")
 
     @property

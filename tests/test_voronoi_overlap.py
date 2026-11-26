@@ -280,18 +280,16 @@ def _expected_samples(ov, name, f_indices=None, weights=None):
     return expected
 
 
-def _labelled(ov, name, chunk_size=64):
-    """The sample labels of a point set, as the pass of ``_entries`` stores them."""
-    ov._entries([(name,)], chunk_size=chunk_size)
-    return ov._sample_labels_cache[name]
-
-
-def _decoded_samples(ov, name, sample_labels):
-    decoded = np.repeat(sample_labels.single[:, np.newaxis], len(ov._ww), axis=1)
-    decoded[sample_labels.mixed_faces] = ov._decode(
-        ov._get(name), sample_labels.mixed_faces, sample_labels.local
+def _sample_labels(ov, name):
+    """The label of every sample of every face, as the pass computes them."""
+    point_set = ov._get(name)
+    faces = np.arange(len(ov.faces))
+    return ov._face_labels(
+        point_set,
+        ov._single_labels(point_set),
+        faces,
+        *ov._boundary_distances(faces),
     )
-    return decoded
 
 
 @pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
@@ -309,15 +307,12 @@ def test_sample_labels(mesh, n_div, t_div, n_points):
         placement = dict(f_indices=f_indices, weights=weights)
         name = "points"
         ov.add(name, **placement)
-    sample_labels = _labelled(ov, name)
-    expected = _expected_samples(ov, name, **placement)
-
-    np.testing.assert_array_equal(_decoded_samples(ov, name, sample_labels), expected)
-    is_single = sample_labels.single >= 0
-    np.testing.assert_array_equal(np.flatnonzero(~is_single), sample_labels.mixed_faces)
+    labels = _sample_labels(ov, name)
+    assert labels.shape == (len(faces), t_div**2)
+    assert labels.dtype == np.int32
+    np.testing.assert_array_equal(labels, _expected_samples(ov, name, **placement))
+    is_single = ov._single_labels(ov._get(name)) >= 0
     assert not np.any(is_single & (np.diff(ov._get(name).inside_ptr) > 0))
-    assert sample_labels.local.shape == (len(sample_labels.mixed_faces), t_div**2)
-    assert sample_labels.local.dtype == np.uint8
     if n_points == 5:
         assert 0 < is_single.sum() < len(faces)
 
@@ -349,60 +344,22 @@ def test_sample_labels_ties(n_div, t_div):
         ("native", {}),
         ("points", dict(f_indices=f_indices, weights=weights)),
     ]:
-        sample_labels = _labelled(ov, name)
         expected = _expected_samples(ov, name, **placement)
-        np.testing.assert_array_equal(
-            _decoded_samples(ov, name, sample_labels), expected
-        )
+        np.testing.assert_array_equal(_sample_labels(ov, name), expected)
 
 
 @pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
-@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
-def test_sample_labels_chunk_size(mesh, points, chunk_size):
-    ov = VoronoiOverlap(*mesh, t_div=4)
-    ov.add("points", points)
-    for name in ov.names:
-        expected = vars(_labelled(ov, name)).copy()
-        ov.clear_cache()
-        sample_labels = _labelled(ov, name, chunk_size=chunk_size)
-        for key, value in expected.items():
-            np.testing.assert_array_equal(getattr(sample_labels, key), value)
-
-
-@pytest.mark.filterwarnings("ignore:.*template vertices are mapped")
-@pytest.mark.parametrize("n_inside, dtype", [(232, np.uint8), (233, np.uint16)])
-def test_sample_labels_dtype(mesh, n_inside, dtype):
+def test_sample_labels_many_inside(mesh):
+    """One face with more inside points than samples."""
     coords, faces, _ = mesh
     ov = VoronoiOverlap(coords, faces, t_div=4)
     rng = np.random.default_rng(0)
     others = np.delete(np.arange(len(faces)), 3)
-    f_indices = np.concatenate([np.full(n_inside, 3), others])
+    f_indices = np.concatenate([np.full(300, 3), others])
     weights = rng.dirichlet(np.ones(3), len(f_indices))
     ov.add("points", f_indices=f_indices, weights=weights)
-    sample_labels = _labelled(ov, "points")
-    assert sample_labels.local.dtype == dtype
     expected = _expected_samples(ov, "points", f_indices, weights)
-    np.testing.assert_array_equal(
-        _decoded_samples(ov, "points", sample_labels), expected
-    )
-
-
-def test_sample_labels_limit(mesh):
-    coords, faces, _ = mesh
-    ov = VoronoiOverlap(coords, faces, n_div=1, t_div=2)
-    weights = np.full((65534, 3), 1 / 3)
-    with pytest.warns(UserWarning, match="mapped to"):
-        ov.add("points", f_indices=np.zeros(65534, dtype=int), weights=weights)
-    with pytest.raises(ValueError, match="65537 candidates in one face"):
-        ov._sample_labels(ov._get("points"))
-
-
-@pytest.mark.parametrize(
-    "n_candidates, dtype", [(1, np.uint8), (256, np.uint8), (257, np.uint16)]
-)
-def test_local_dtype(n_candidates, dtype):
-    assert voronoi._local_dtype(n_candidates) == dtype
-    assert voronoi._local_dtype(65536) == np.uint16
+    np.testing.assert_array_equal(_sample_labels(ov, "points"), expected)
 
 
 @pytest.mark.parametrize("t_div", [1, 2, 3, 32])
@@ -453,13 +410,9 @@ def _reference(ov, placements, source, target):
     )
 
 
-def _with_point_sets(
-    mesh, n_div=8, t_div=4, sizes=(("few", 5), ("many", 40)), cache_samples=True
-):
+def _with_point_sets(mesh, n_div=8, t_div=4, sizes=(("few", 5), ("many", 40))):
     coords, faces, _ = mesh
-    ov = VoronoiOverlap(
-        coords, faces, n_div=n_div, t_div=t_div, cache_samples=cache_samples
-    )
+    ov = VoronoiOverlap(coords, faces, n_div=n_div, t_div=t_div)
     placements = {}
     for name, n in sizes:
         rng = np.random.default_rng(n)
@@ -473,11 +426,10 @@ def _with_point_sets(
     return ov, placements
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
 @pytest.mark.parametrize("n_div", [1, 8])
 @pytest.mark.parametrize("t_div", [1, 2, 3, 8])
-def test_transform_matches_compute_overlap(mesh, n_div, t_div, cache_samples):
-    ov, placements = _with_point_sets(mesh, n_div, t_div, cache_samples=cache_samples)
+def test_transform_matches_compute_overlap(mesh, n_div, t_div):
+    ov, placements = _with_point_sets(mesh, n_div, t_div)
     for source in ov.names:
         for target in ov.names:
             mat = ov.transform(source, target)
@@ -487,11 +439,10 @@ def test_transform_matches_compute_overlap(mesh, n_div, t_div, cache_samples):
             np.testing.assert_allclose(mat.sum(), ov.face_areas.sum())
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
 @pytest.mark.parametrize("n_div", [1, 8])
 @pytest.mark.parametrize("t_div", [1, 2, 3, 8])
-def test_areas(mesh, n_div, t_div, cache_samples):
-    ov, placements = _with_point_sets(mesh, n_div, t_div, cache_samples=cache_samples)
+def test_areas(mesh, n_div, t_div):
+    ov, placements = _with_point_sets(mesh, n_div, t_div)
     for name in ["native", "few", "many"]:
         expected = np.zeros(ov._get(name).size)
         occupation = _expected_samples(ov, name, *placements.get(name, ()))
@@ -514,28 +465,24 @@ def test_vertex_areas_nn(mesh, dtype, n_div, t_div):
         np.testing.assert_array_equal(surf.vertex_areas_nn(), areas)
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
 @pytest.mark.parametrize("chunk_size", [1, 7, 1000])
-def test_entries_chunk_size(mesh, chunk_size, cache_samples):
+def test_entries_chunk_size(mesh, chunk_size):
+    """Several requests in one pass give the entries of each request alone."""
     requests = [("native",), ("many",), ("native", "few"), ("many", "native")]
-    expected, _ = _with_point_sets(mesh, cache_samples=cache_samples)
-    ov, _ = _with_point_sets(mesh, cache_samples=cache_samples)
-    # Once together and, with the cache, once more from the cached labels.
-    for _ in range(2):
-        entries = ov._entries(requests, chunk_size=chunk_size)
-        for request, request_entries in zip(requests, entries):
-            for a, b in zip(request_entries, expected._entries([request])[0]):
-                np.testing.assert_array_equal(a, b)
+    ov, _ = _with_point_sets(mesh)
+    entries = ov._entries(requests, chunk_size=chunk_size)
+    for request, request_entries in zip(requests, entries):
+        for a, b in zip(request_entries, ov._entries([request])[0]):
+            np.testing.assert_array_equal(a, b)
 
 
 SIX_SETS = (("a", 3), ("b", 5), ("c", 17), ("d", 40), ("e", 200))
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
-def test_transforms_all_pairs(mesh, cache_samples):
+def test_transforms_all_pairs(mesh):
     """All ordered pairs of six point sets in one pass."""
-    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
-    single, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
+    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS)
+    single, _ = _with_point_sets(mesh, sizes=SIX_SETS)
     pairs = [(a, b) for a in ov.names for b in ov.names]
     mats = ov.transforms(pairs)
     assert len(mats) == 36
@@ -543,14 +490,13 @@ def test_transforms_all_pairs(mesh, cache_samples):
         _assert_identical(mat, single.transform(*pair))
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
-def test_transforms_composition_and_order(mesh, cache_samples):
-    """A matrix does not depend on the other pairs of the call, on their
-    order, or on which point sets have cached labels."""
+def test_transforms_composition_and_order(mesh):
+    """A matrix does not depend on the other pairs of the call or on their
+    order."""
     single, _ = _with_point_sets(mesh, sizes=SIX_SETS)
     names = single.names
     expected = {(a, b): single.transform(a, b) for a in names for b in names}
-    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS, cache_samples=cache_samples)
+    ov, _ = _with_point_sets(mesh, sizes=SIX_SETS)
     rng = np.random.default_rng(0)
     for _ in range(10):
         # With repeated pairs.
@@ -582,9 +528,8 @@ def test_transforms_special_requests(mesh):
     _assert_identical(ov.transforms(iter([["native", "many"]]))[0], expected)
 
 
-@pytest.mark.parametrize("cache_samples", [True, False])
-def test_self_overlap(mesh, cache_samples):
-    ov, _ = _with_point_sets(mesh, cache_samples=cache_samples)
+def test_self_overlap(mesh):
+    ov, _ = _with_point_sets(mesh)
     for name, mat in zip(ov.names, ov.transforms([(n, n) for n in ov.names])):
         diagonal = mat.diagonal()
         assert mat.nnz == np.count_nonzero(diagonal)
@@ -625,9 +570,8 @@ def test_scaling_by_power_of_two_is_exact(mesh, scale):
 
 
 def test_pass_shares_distances(mesh, monkeypatch):
-    """Point sets labelled in one pass share the distances of each face, and
-    cached labels need none."""
-    ov, _ = _with_point_sets(mesh)
+    """The point sets of a call share the distances of each face."""
+    ov, _ = _with_point_sets(mesh, sizes=[("few", 5), ("some", 10)])
     calls = []
     boundary_distances = ov._boundary_distances
     monkeypatch.setattr(
@@ -635,17 +579,14 @@ def test_pass_shares_distances(mesh, monkeypatch):
         "_boundary_distances",
         lambda faces: calls.append(len(faces)) or boundary_distances(faces),
     )
-    ov._entries([("few", "many"), ("many", "few"), ("few",)])
-    is_mixed = {name: ov._sample_labels_cache[name].single < 0 for name in ov.names[1:]}
-    assert 0 < is_mixed["few"].sum() < is_mixed["many"].sum()
-    assert sum(calls) == (is_mixed["few"] | is_mixed["many"]).sum()
-    calls.clear()
-    ov._entries([("few", "many")])
-    assert calls == []
-    # Only the faces that the new point set needs.
-    ov.clear_cache("few")
-    ov._entries([("few", "many")])
-    assert sum(calls) == is_mixed["few"].sum()
+    is_mixed = {name: ov._single_labels(ov._get(name)) < 0 for name in ("few", "some")}
+    n_visited = (is_mixed["few"] | is_mixed["some"]).sum()
+    assert max(is_mixed["few"].sum(), is_mixed["some"].sum()) < n_visited
+    for requests in [[("few", "some")], [("few", "some"), ("some", "few"), ("few",)]]:
+        calls.clear()
+        ov._entries(requests, chunk_size=7)
+        assert sum(calls) == n_visited < len(ov.faces)
+        assert max(calls) == 7
 
 
 def test_transform_returns_new_arrays(mesh):
@@ -682,60 +623,3 @@ def test_transform_unreachable_faces(mesh):
         ov.transform("native", "points")
     with pytest.raises(ValueError, match="cannot be reached"):
         ov.areas("points")
-
-
-def test_discard_releases_samples(mesh):
-    ov, _ = _with_point_sets(mesh)
-    ov.transform("native", "many")
-    assert set(ov._sample_labels_cache) == {"native", "many"}
-    ov.discard("many")
-    ov.discard("native")
-    assert ov._sample_labels_cache == {}
-    with pytest.raises(KeyError):
-        ov.transform("native", "many")
-    _assert_identical(ov.transform("native", "few"), ov.transform("few", "native").T)
-
-
-def test_uncached_transform(mesh, monkeypatch):
-    ov, _ = _with_point_sets(mesh, cache_samples=False)
-    cached, _ = _with_point_sets(mesh)
-    calls = []
-    boundary_distances = ov._boundary_distances
-    monkeypatch.setattr(
-        ov,
-        "_boundary_distances",
-        lambda faces: calls.append(len(faces)) or boundary_distances(faces),
-    )
-    for names in [("native", "many"), ("few", "many"), ("many",)]:
-        calls.clear()
-        (entries,) = ov._entries([names], chunk_size=7)
-        (expected,) = cached._entries([names], chunk_size=7)
-        for a, b in zip(entries, expected):
-            np.testing.assert_array_equal(a, b)
-        # The two point sets share the distances of each chunk.
-        is_mixed = np.logical_or.reduce(
-            [cached._get_sample_labels(name).single < 0 for name in names]
-        )
-        assert sum(calls) == is_mixed.sum()
-        assert max(calls) == 7
-    assert ov._sample_labels_cache == {}
-
-
-def test_clear_cache(mesh):
-    ov, _ = _with_point_sets(mesh)
-    expected = ov.transform("native", "many")
-    expected_areas = ov.areas("few")
-    assert set(ov._sample_labels_cache) == {"native", "many", "few"}
-    ov.clear_cache("many")
-    assert set(ov._sample_labels_cache) == {"native", "few"}
-    native = ov._get("native")
-    _assert_identical(ov.transform("native", "many"), expected)
-    assert ov._get("native") is native
-    ov.clear_cache()
-    assert ov._sample_labels_cache == {}
-    _assert_identical(ov.transform("native", "many"), expected)
-    np.testing.assert_array_equal(ov.areas("few"), expected_areas)
-    ov.clear_cache("native")
-    assert set(ov._sample_labels_cache) == {"many", "few"}
-    with pytest.raises(KeyError, match="No point set named 'other'"):
-        ov.clear_cache("other")

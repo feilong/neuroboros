@@ -70,10 +70,10 @@ STAGES = [
 # The next three functions are the only ones that use the API.
 
 
-def make_surface(coords, faces, sphere, cache_samples):
+def make_surface(coords, faces, sphere):
     from neuroboros.surface.voronoi import VoronoiOverlap
 
-    return VoronoiOverlap(coords, faces, sphere, cache_samples=cache_samples)
+    return VoronoiOverlap(coords, faces, sphere)
 
 
 def add_partition(surface, name, points):
@@ -116,7 +116,7 @@ def peak_memory_gb():
     return peak * (1 if sys.platform == "darwin" else 1024) / 1e9
 
 
-def run_workload(native, templates, workload, cache_samples):
+def run_workload(native, templates, workload):
     """Run one workload in this process and return its measurements."""
     import neuroboros as nb
 
@@ -135,7 +135,7 @@ def run_workload(native, templates, workload, cache_samples):
 
     steps, results = {}, {}
     step = time.perf_counter()
-    surface = make_surface(coords, faces, sphere, cache_samples)
+    surface = make_surface(coords, faces, sphere)
     steps["surface"] = time.perf_counter() - step
     step = time.perf_counter()
     for name, point_coords in points.items():
@@ -159,10 +159,9 @@ def run_workload(native, templates, workload, cache_samples):
     )
 
 
-def run_in_subprocess(args, workload, cache_samples):
+def run_in_subprocess(args, workload):
     command = [sys.executable, __file__, "--child", workload]
     command += ["--native", args.native, "--templates", *args.templates]
-    command += ["--cache", "on" if cache_samples else "off"]
     out = subprocess.run(command, capture_output=True, text=True)
     lines = [line for line in out.stdout.splitlines() if line.startswith(MARKER)]
     if out.returncode or not lines:
@@ -185,7 +184,7 @@ def describe(result):
         f"{result['total']:7.1f} s  {result['peak_memory_gb']:5.2f} GB  "
         f"surface {result['steps']['surface']:.1f}, "
         f"partitions {result['steps']['partitions']:.1f}, requests {requests}"
-        f"\n{'':25}[{stages}]"
+        f"\n{'':15}[{stages}]"
     )
 
 
@@ -194,7 +193,6 @@ def main():
     parser.add_argument("--native", default="onavg-ico32", choices=list(TEMPLATES))
     parser.add_argument("--templates", nargs=3, help="Three spaces, coarse to fine.")
     parser.add_argument("--workloads", nargs="+", help="Default: all.")
-    parser.add_argument("--cache", nargs="+", default=["on"], choices=["on", "off"])
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--note", default="", help="Stored with the record.")
@@ -203,31 +201,24 @@ def main():
     args.templates = args.templates or TEMPLATES[args.native]
 
     if args.child:
-        result = run_workload(
-            args.native, args.templates, args.child, args.cache == ["on"]
-        )
+        result = run_workload(args.native, args.templates, args.child)
         print(MARKER + json.dumps(result))
         return
 
     names = args.workloads or list(workloads(args.templates))
     results, digests = {}, {}
-    for cache in args.cache:
-        for name in names:
-            key = f"{name}, cache {cache}"
-            runs = [
-                run_in_subprocess(args, name, cache == "on")
-                for _ in range(args.repeats)
-            ]
-            # Report the fastest run and keep the totals of all of them.
-            results[key] = dict(
-                min(runs, key=lambda run: run["total"]),
-                totals=[run["total"] for run in runs],
-            )
-            print(f"{key:22} {describe(results[key])}", flush=True)
-            for run in runs:
-                for output, record in run["outputs"].items():
-                    expected = digests.setdefault(output, record)
-                    assert record == expected, f"{output} differs in {key}"
+    for name in names:
+        runs = [run_in_subprocess(args, name) for _ in range(args.repeats)]
+        # Report the fastest run and keep the totals of all of them.
+        results[name] = dict(
+            min(runs, key=lambda run: run["total"]),
+            totals=[run["total"] for run in runs],
+        )
+        print(f"{name:12} {describe(results[name])}", flush=True)
+        for run in runs:
+            for output, record in run["outputs"].items():
+                expected = digests.setdefault(output, record)
+                assert record == expected, f"{output} differs in {name}"
     print("Every output has the same digest in all workloads.")
     for output, record in digests.items():
         print(f"  {output}: sum {record['sum']!r}, sha256 {record['sha256'][:16]}")

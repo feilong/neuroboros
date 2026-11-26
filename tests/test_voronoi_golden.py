@@ -40,7 +40,7 @@ def _check_golden(case, compute):
 
 @pytest.mark.parametrize(
     "compute",
-    [vg.compute, vg.compute_class, vg.compute_class_uncached, vg.compute_class_batch],
+    [vg.compute, vg.compute_class, vg.compute_class_batch],
     ids=lambda f: f.__name__,
 )
 @pytest.mark.parametrize("case", vg.CASES, ids=vg.case_id)
@@ -62,7 +62,7 @@ def test_vertex_areas_nn_matches_functions(case):
 
 @pytest.mark.parametrize(
     "compute",
-    [vg.compute_class, vg.compute_class_uncached, vg.compute_class_batch],
+    [vg.compute_class, vg.compute_class_batch],
     ids=lambda f: f.__name__,
 )
 @pytest.mark.parametrize("case", vg.CASES, ids=vg.case_id)
