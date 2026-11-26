@@ -91,6 +91,26 @@ def _subdivided_graph(coords, faces, n_div):
     new_coords = (end_coords * steps + start_coords * (n_div - steps)) / n_div
     new_coords = new_coords.reshape(-1, 3).astype(coords.dtype)
 
+    # In a face with the same vertex twice, some connections coincide. Only
+    # the builder that lists the connections adds their lengths up.
+    args = (coords, new_coords, faces, edges, face_edge_ids, edge_points)
+    if np.any(faces == faces[:, [1, 2, 0]]):
+        neighbors = _listed_graph(*args)
+    else:
+        neighbors = _filled_graph(*args)
+    return edges, face_edge_ids, edge_points, new_coords, neighbors
+
+
+def _listed_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
+    """Build the distance graph of ``_subdivided_graph`` from lists of its
+    connections.
+
+    The lists take several times the memory of the graph. ``_filled_graph``
+    builds the same graph without them, for faces of three distinct vertices.
+    """
+    n_edge_points = edge_points.shape[1]
+    n_div = n_edge_points + 1
+
     # Collect each connection once; add its reverse when building the graph.
     # Start with consecutive points along each edge, including both endpoints.
     chain = np.concatenate([edges[:, :1], edge_points, edges[:, 1:]], axis=1)
@@ -129,14 +149,13 @@ def _subdivided_graph(coords, faces, n_div):
     # Release the blocks before allocating the symmetric graph entries.
     del row_blocks, col_blocks, distance_blocks
     n_vertices = all_coords.shape[0]
-    neighbors = sparse.csr_matrix(
+    return sparse.csr_matrix(
         (
             np.concatenate([distances, distances]),
             (np.concatenate([rows, cols]), np.concatenate([cols, rows])),
         ),
         shape=(n_vertices, n_vertices),
     )
-    return edges, face_edge_ids, edge_points, new_coords, neighbors
 
 
 def _ranks(keys, n):
@@ -155,10 +174,9 @@ def _filled_graph(coords, new_coords, faces, edges, face_edge_ids, edge_points):
 
     The arguments are the vertices and faces of the mesh and the other
     outputs of ``_subdivided_graph``. The graph has the same connections and
-    lengths, and its indices are sorted, so its three arrays equal those of
-    the graph that ``_subdivided_graph`` builds from lists of connections.
-    Those lists take several times the memory of the graph; here every
-    connection is written to its place in the final arrays.
+    lengths as that of ``_listed_graph``, and its indices are sorted, so the
+    three arrays of the two graphs are equal. Here every connection is
+    written to its place in the final arrays, without lists of connections.
 
     No face may have the same vertex twice.
     """

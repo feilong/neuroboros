@@ -160,21 +160,40 @@ def _graph_meshes():
 @pytest.mark.parametrize("n_div", [1, 2, 3, 8])
 @pytest.mark.parametrize("mesh", _graph_meshes(), ids=lambda mesh: mesh[0])
 def test_filled_graph(mesh, n_div):
-    """The graph that is filled directly has the same three arrays."""
+    """The graph that is filled directly has the same three arrays as the
+    graph that is built from lists of connections."""
     _, coords, faces = mesh
-    edges, face_edge_ids, edge_points, new_coords, expected = voronoi._subdivided_graph(
+    edges, face_edge_ids, edge_points, new_coords, graph = voronoi._subdivided_graph(
         coords, faces, n_div
     )
-    graph = voronoi._filled_graph(
-        coords, new_coords, faces, edges, face_edge_ids, edge_points
-    )
+    args = (coords, new_coords, faces, edges, face_edge_ids, edge_points)
+    expected = voronoi._listed_graph(*args)
     assert expected.has_sorted_indices
+    # _subdivided_graph fills its graph.
+    np.testing.assert_array_equal(graph.data, voronoi._filled_graph(*args).data)
     assert graph.shape == expected.shape
     for name in ("indptr", "indices", "data"):
         a, b = getattr(graph, name), getattr(expected, name)
         assert a.dtype == b.dtype
         np.testing.assert_array_equal(a, b)
     assert (graph != graph.T).nnz == 0
+
+
+@pytest.mark.parametrize("n_div", [1, 2, 5])
+def test_subdivided_graph_repeated_vertex(n_div):
+    """A face with the same vertex twice is built from lists of connections."""
+    _, coords, faces = _graph_meshes()[0]
+    faces = np.vstack([faces, [[3, 3, 9]]])
+    edges, face_edge_ids, edge_points, new_coords, graph = voronoi._subdivided_graph(
+        coords, faces, n_div
+    )
+    expected = voronoi._listed_graph(
+        coords, new_coords, faces, edges, face_edge_ids, edge_points
+    )
+    assert (graph != expected).nnz == 0
+    np.testing.assert_array_equal(graph.data, expected.data)
+    # The frozen copy builds it in the same way.
+    assert (graph != reference.subdivide_edges(coords, faces, n_div)[2]).nnz == 0
 
 
 def _assert_equal_outputs(a, b):
