@@ -203,22 +203,28 @@ def test_partition_labels(mesh, points, n_div):
     assert len(np.unique(f_indices)) < len(points)
     nn, nnd = reference.subdivision_voronoi(*_old_inputs(surface), f_indices, weights)
     assert point_set.nn.dtype == np.int32
-    expected = _lowest_labels(
-        surface._graph, nnd, nn, *_point_connections(surface, partition)
-    )
-    np.testing.assert_array_equal(point_set.nn, expected)
-    np.testing.assert_array_equal(point_set.nnd, nnd)
     assert point_set.size == len(points)
+    # The reference places the points with a matrix product, which rounds
+    # differently, so the distances agree only up to rounding. The exact
+    # values are checked in test_labels_do_not_depend_on_scipy.
+    np.testing.assert_allclose(point_set.nnd, nnd, rtol=1e-13)
+    # No node is at the same distance from two of these points.
+    np.testing.assert_array_equal(point_set.nn, nn)
 
     f_inv = reference.inverse_face_mapping(f_indices, weights, surface.coords, faces)
     for f in range(len(faces)):
         inside = slice(point_set.inside_ptr[f], point_set.inside_ptr[f + 1])
         expected = f_inv.get(f, [])
         assert point_set.inside_labels[inside].tolist() == [i for i, _ in expected]
-        np.testing.assert_array_equal(
+        np.testing.assert_allclose(
             point_set.inside_coords[inside],
             np.reshape([c for _, c in expected], (-1, 3)),
+            rtol=1e-13,
         )
+        positions = voronoi._barycentric_points(
+            weights[point_set.inside_labels[inside]], surface.coords[faces[f]]
+        )
+        np.testing.assert_array_equal(point_set.inside_coords[inside], positions)
 
 
 def test_partition_placement_routes(mesh, points):
@@ -542,6 +548,23 @@ def test_split_triangle(t_div):
     np.testing.assert_allclose(ww.mean(axis=0), 1 / 3)
     if t_div == 1:
         np.testing.assert_array_equal(ww, [[1 / 3, 1 / 3, 1 / 3]])
+
+
+def test_barycentric_points():
+    rng = np.random.default_rng(0)
+    weights = rng.dirichlet(np.ones(3), (5, 7))
+    corners = rng.standard_normal((5, 1, 3, 3)) * 100
+    points = voronoi._barycentric_points(weights, corners)
+    assert points.shape == (5, 7, 3)
+    np.testing.assert_allclose(points, np.matmul(weights, corners[:, 0]), rtol=1e-13)
+    # Every operation is rounded on its own, from left to right.
+    for i, j, k in [(0, 0, 0), (4, 6, 2), (2, 3, 1)]:
+        w, c = weights[i, j].tolist(), corners[i, 0, :, k].tolist()
+        assert points[i, j, k] == w[0] * c[0] + w[1] * c[1] + w[2] * c[2]
+    corners = np.eye(3)
+    np.testing.assert_array_equal(
+        voronoi._barycentric_points(corners, corners), corners
+    )
 
 
 def _assert_identical(mat, expected):

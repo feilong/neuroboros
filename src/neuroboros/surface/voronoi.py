@@ -970,9 +970,7 @@ class VoronoiSurface:
         point index wins an exact tie (``_lowest_labels``).
         """
         n_nodes, n = len(self._node_coords), len(f_indices)
-        # The batched matmul rounds like ``weights[i] @ coords[faces[f]]``.
-        corners = self.coords[self.faces[f_indices]]
-        positions = np.matmul(weights[:, np.newaxis], corners)[:, 0]
+        positions = _barycentric_points(weights, self.coords[self.faces[f_indices]])
         boundary = self._face_nodes[f_indices]
         # The sum of squares rounds like ``cdist``.
         diff = positions[:, np.newaxis] - self._node_coords[boundary]
@@ -1040,8 +1038,8 @@ class VoronoiSurface:
         For k face indices, the shapes are (k, n_samples, 3) and
         (k, n_samples, n_boundary). Neither array depends on the point set.
         """
-        # The batched matmul rounds like ``ww @ coords[f]``.
-        samples = np.matmul(self._ww, self.coords[self.faces[face_indices]])
+        corners = self.coords[self.faces[face_indices]]
+        samples = _barycentric_points(self._ww, corners[:, np.newaxis])
         boundary = self._node_coords[self._face_nodes[face_indices]]
         distances = np.empty((len(face_indices), len(self._ww), boundary.shape[1]))
         for i in range(len(face_indices)):
@@ -1177,6 +1175,23 @@ class _PointSet:
         for value in vars(self).values():
             if isinstance(value, np.ndarray):
                 value.flags.writeable = False
+
+
+def _barycentric_points(weights, corners):
+    """Return the points with the given barycentric weights in triangles.
+
+    ``weights`` has shape (..., 3) and ``corners`` has shape (..., 3, 3),
+    with the three corners of a triangle along the second last axis. The
+    leading axes are broadcast. Each coordinate is
+    ``w0 * c0 + w1 * c1 + w2 * c2``, with every product and sum rounded
+    separately and the sums taken from left to right. ``matmul`` gives the
+    same points up to rounding, but how it rounds depends on NumPy's build.
+    """
+    return (
+        weights[..., 0, np.newaxis] * corners[..., 0, :]
+        + weights[..., 1, np.newaxis] * corners[..., 1, :]
+        + weights[..., 2, np.newaxis] * corners[..., 2, :]
+    )
 
 
 def _lowest_labels(graph, distances, labels, point_nodes=None, point_distances=None):
