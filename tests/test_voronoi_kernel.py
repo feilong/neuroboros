@@ -34,8 +34,22 @@ def test_load_kernel_not_built(monkeypatch):
     assert voronoi._load_kernel() is None
 
 
+def test_load_kernel_refuses_old_build(monkeypatch):
+    kernel = pytest.importorskip(MODULE)
+    for missing in ("multiply_add", "label_samples", "count_labels"):
+        names = {"multiply_add", "label_samples", "count_labels"} - {missing}
+        old = types.SimpleNamespace(**{name: getattr(kernel, name) for name in names})
+        monkeypatch.setitem(sys.modules, MODULE, old)
+        with pytest.warns(RuntimeWarning, match="older version"):
+            assert voronoi._load_kernel() is None
+
+
 def test_load_kernel_refuses_fused_multiply_add(monkeypatch):
-    fused = types.SimpleNamespace(multiply_add=lambda a, b, c: 2.0**-26 + 2.0**-54)
+    fused = types.SimpleNamespace(
+        multiply_add=lambda a, b, c: 2.0**-26 + 2.0**-54,
+        label_samples=None,
+        count_labels=None,
+    )
     monkeypatch.setitem(sys.modules, MODULE, fused)
     with pytest.warns(RuntimeWarning, match="fused multiply-add"):
         assert voronoi._load_kernel() is None
@@ -255,6 +269,15 @@ def test_label_samples_rejects_invalid(mesh):
     # The valid call still gives the same labels.
     kernel.label_samples(*args)
     np.testing.assert_array_equal(args[-1], expected)
+
+
+def test_label_samples_without_partitions(mesh):
+    kernel = pytest.importorskip(MODULE)
+    surface = VoronoiSurface(*mesh, sample_divisions=2)
+    args = _kernel_arguments(surface, [surface.native], np.arange(4))
+    for index in (6, 7, 8, 9, 12):
+        args[index] = args[index][:0].copy()
+    assert kernel.label_samples(*args) is None
 
 
 def _numpy_counts(first, second, n_second, face_indices, selected):

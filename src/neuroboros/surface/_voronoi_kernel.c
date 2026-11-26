@@ -18,10 +18,10 @@
 #error "_voronoi_kernel.c must be compiled without fast-math."
 #endif
 /* GCC has no pragma for this and needs -ffp-contract=off. */
-#if defined(_MSC_VER)
-#pragma fp_contract(off)
-#elif defined(__clang__)
+#if defined(__clang__)
 #pragma STDC FP_CONTRACT OFF
+#elif defined(_MSC_VER)
+#pragma fp_contract(off)
 #endif
 
 PyDoc_STRVAR(multiply_add_doc,
@@ -63,7 +63,8 @@ get_array(PyObject *obj, Py_buffer *view, const char *name, char kind,
     if (*format == '@' || *format == '=') {
         format++;
     }
-    if (view->ndim != ndim || view->itemsize != itemsize || format[1] != '\0'
+    if (view->ndim != ndim || view->itemsize != itemsize
+            || format[0] == '\0' || format[1] != '\0'
             || !strchr(kind == 'f' ? "d" : kind == 'b' ? "?" : "ilqn",
                        format[0])) {
         PyErr_Format(PyExc_TypeError,
@@ -108,7 +109,9 @@ label_samples_loop(const LabelArgs *a)
     /* Of the boundary nodes of one face: the coordinates and the distances
      * to one sample, then the distance and the label for each partition. */
     double *scratch = malloc((4 + n_partitions) * n_boundary * sizeof(double));
-    int32_t *node_labels = malloc(n_partitions * n_boundary * sizeof(int32_t));
+    /* At least one element: malloc(0) may return NULL. */
+    int32_t *node_labels =
+        malloc((n_partitions * n_boundary + 1) * sizeof(int32_t));
     double *bx = scratch, *by = bx + n_boundary, *bz = by + n_boundary;
     double *dist = bz + n_boundary, *node_dists = dist + n_boundary;
 

@@ -1423,14 +1423,23 @@ def _load_kernel():
 
     The kernel is optional. It may not be built, and setting the environment
     variable ``NEUROBOROS_VORONOI_KERNEL`` to ``0`` turns it off. It is also
-    refused if it was compiled with fused multiply-add, because its results
-    would then differ from NumPy's in the last bits.
+    refused, with a warning, if it lacks a function, as a build from older
+    source does, or if it was compiled with fused multiply-add, because its
+    results would then differ from NumPy's in the last bits.
     """
     if os.environ.get("NEUROBOROS_VORONOI_KERNEL") == "0":
         return None
     try:
         kernel = importlib.import_module("._voronoi_kernel", __package__)
     except ImportError:
+        return None
+    functions = ("multiply_add", "label_samples", "count_labels")
+    if not all(hasattr(kernel, name) for name in functions):
+        warnings.warn(
+            "The compiled Voronoi kernel was built from an older version of "
+            "the source and is not used. Build it again.",
+            RuntimeWarning,
+        )
         return None
     # The exact product is 1 + 2**-26 + 2**-54. Its last term is lost when
     # the product is rounded, and kept by a fused multiply-add.
