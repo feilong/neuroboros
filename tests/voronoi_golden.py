@@ -31,7 +31,7 @@ from voronoi_reference import (
 )
 
 import neuroboros as nb
-from neuroboros.surface import Sphere, Surface
+from neuroboros.surface import Sphere, Surface, voronoi
 from neuroboros.surface.voronoi import VoronoiSurface
 
 GOLDEN_FN = os.path.join(os.path.dirname(__file__), "data", "voronoi_golden.json")
@@ -252,6 +252,15 @@ def compute_class_batch(case):
     surface, source, target = _case_partitions(case)
     pairs = [(target, target), (target, source), (source, target)]
     return surface.overlaps(pairs)[2]
+
+
+def compute_class_numpy(case):
+    """Compute a case with ``VoronoiSurface``, without the compiled kernel."""
+    kernel, voronoi._kernel = voronoi._kernel, None
+    try:
+        return compute_class(case)
+    finally:
+        voronoi._kernel = kernel
 
 
 def load():

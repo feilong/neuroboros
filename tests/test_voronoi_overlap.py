@@ -1,4 +1,5 @@
 import gc
+import types
 import weakref
 
 import numpy as np
@@ -10,6 +11,16 @@ from scipy.spatial import ConvexHull
 
 from neuroboros.surface import Sphere, Surface, voronoi
 from neuroboros.surface.voronoi import VoronoiPartition, VoronoiSurface
+
+
+@pytest.fixture(params=["kernel", "numpy"], autouse=True)
+def labelling_path(request, monkeypatch):
+    """Run every test with the compiled kernel and with NumPy."""
+    if request.param == "numpy":
+        monkeypatch.setattr(voronoi, "_kernel", None)
+    elif voronoi._kernel is None:
+        pytest.skip("The compiled kernel is not built.")
+    return request.param
 
 
 @pytest.fixture
@@ -770,18 +781,29 @@ def test_scaling_by_power_of_two_is_exact(mesh, scale):
     )
 
 
-def test_pass_shares_distances(mesh, monkeypatch):
+def test_pass_shares_distances(mesh, monkeypatch, labelling_path):
     """The partitions of a call share the distances of each face."""
     partitions, _ = _partitions(mesh, sizes=[("few", 5), ("some", 10)])
     _, few, some = partitions.values()
     surface = few.surface
+    # Count the faces whose distances are computed, in either path.
     calls = []
-    boundary_distances = surface._boundary_distances
-    monkeypatch.setattr(
-        surface,
-        "_boundary_distances",
-        lambda faces: calls.append(len(faces)) or boundary_distances(faces),
-    )
+    if labelling_path == "kernel":
+        label_samples = voronoi._kernel.label_samples
+
+        def counting(*args):
+            calls.append(len(args[5]))
+            return label_samples(*args)
+
+        kernel = types.SimpleNamespace(label_samples=counting)
+        monkeypatch.setattr(voronoi, "_kernel", kernel)
+    else:
+        boundary_distances = surface._boundary_distances
+        monkeypatch.setattr(
+            surface,
+            "_boundary_distances",
+            lambda faces: calls.append(len(faces)) or boundary_distances(faces),
+        )
     is_mixed = [surface._single_labels(p._point_set) < 0 for p in (few, some)]
     n_visited = (is_mixed[0] | is_mixed[1]).sum()
     assert max(is_mixed[0].sum(), is_mixed[1].sum()) < n_visited
@@ -790,6 +812,21 @@ def test_pass_shares_distances(mesh, monkeypatch):
         surface._entries(requests, chunk_size=7)
         assert sum(calls) == n_visited < len(surface.faces)
         assert max(calls) == 7
+
+
+def test_paths_give_the_same_entries(mesh, monkeypatch, labelling_path):
+    """The compiled kernel and NumPy, for several requests in one pass."""
+    if labelling_path == "numpy":
+        pytest.skip("Compares the two paths once.")
+    partitions, _ = _partitions(mesh, sizes=SIX_SETS)
+    surface = partitions["native"].surface
+    requests = [(a, b) for a in partitions.values() for b in partitions.values()]
+    requests += [(a,) for a in partitions.values()]
+    entries = surface._entries(requests, chunk_size=5)
+    monkeypatch.setattr(voronoi, "_kernel", None)
+    for a, b in zip(entries, surface._entries(requests, chunk_size=5)):
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x, y)
 
 
 def test_outputs_are_new_arrays(mesh):

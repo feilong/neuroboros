@@ -841,7 +841,9 @@ class VoronoiSurface:
         in face order, as the in-place additions of ``compute_overlap`` do.
 
         All requests are served by one pass over the faces, and the
-        partitions use the same sample distances.
+        partitions use the same sample distances. The samples are labelled by
+        the compiled kernel if it is available, and with NumPy otherwise.
+        Both give the same labels.
         """
         partitions = list(
             dict.fromkeys(partition for request in requests for partition in request)
@@ -852,6 +854,9 @@ class VoronoiSurface:
         }
         is_mixed = {partition: single[partition] < 0 for partition in partitions}
         n_samples = len(self._ww)
+        kernel_arrays = None
+        if _kernel is not None and partitions:
+            kernel_arrays = self._kernel_arrays(partitions, single)
 
         def encode_labels(request, labels):
             # Labels are int32. Convert them to int64 before combining them,
@@ -880,13 +885,9 @@ class VoronoiSurface:
         visited_faces = np.flatnonzero(any_mixed)
         for start in range(0, len(visited_faces), chunk_size):
             face_indices = visited_faces[start : start + chunk_size]
-            boundary = self._boundary_distances(face_indices)
-            labels = {
-                partition: self._face_labels(
-                    partition._point_set, single[partition], face_indices, *boundary
-                )
-                for partition in partitions
-            }
+            labels = self._sample_labels(
+                partitions, single, face_indices, kernel_arrays
+            )
             for request, (face_parts, key_parts, count_parts) in zip(requests, parts):
                 # The faces where both sets have one label are counted above.
                 rows = np.zeros(len(face_indices), dtype=bool)
@@ -922,6 +923,35 @@ class VoronoiSurface:
             counts = np.concatenate(count_parts)[order]
             entries.append((faces, keys, counts / n_samples * self.face_areas[faces]))
         return entries
+
+    def _sample_labels(self, partitions, single, face_indices, kernel_arrays=None):
+        """Return the labels of the samples of the faces for each partition.
+
+        Each array has shape (len(face_indices), n_samples). ``kernel_arrays``
+        is the output of ``_kernel_arrays``, or None to compute with NumPy.
+        """
+        if kernel_arrays is None:
+            boundary = self._boundary_distances(face_indices)
+            return {
+                partition: self._face_labels(
+                    partition._point_set, single[partition], face_indices, *boundary
+                )
+                for partition in partitions
+            }
+        labels = np.empty(
+            (len(partitions), len(face_indices), len(self._ww)), dtype=np.int32
+        )
+        _kernel.label_samples(
+            self._ww,
+            self.coords,
+            self.faces,
+            self._node_coords,
+            self._face_nodes,
+            face_indices,
+            *kernel_arrays,
+            labels,
+        )
+        return dict(zip(partitions, labels))
 
     def _kernel_arrays(self, partitions, single):
         """Stack the arrays of the partitions for ``_kernel.label_samples``.

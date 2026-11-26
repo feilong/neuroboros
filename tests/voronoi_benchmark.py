@@ -63,6 +63,8 @@ STAGES = [
     ("VoronoiSurface", "_boundary_distances"),
     ("VoronoiSurface", "_local_labels"),
     ("VoronoiSurface", "_decode"),
+    ("VoronoiSurface", "_entries"),
+    ("_kernel", "label_samples"),
 ]
 
 
@@ -87,6 +89,12 @@ def run_request(surface, partitions, request):
         return {"areas native": partitions["native"].areas()}
     mats = surface.overlaps([(partitions[a], partitions[b]) for a, b in request])
     return {f"{a} to {b}": mat for (a, b), mat in zip(request, mats)}
+
+
+def uses_kernel():
+    from neuroboros.surface import voronoi
+
+    return getattr(voronoi, "_kernel", None) is not None
 
 
 def install_timers(stage_times):
@@ -152,6 +160,7 @@ def run_workload(native, templates, workload):
     return dict(
         total=total,
         peak_memory_gb=peak,
+        kernel=uses_kernel(),
         steps=steps,
         stages=dict(stage_times),
         outputs=outputs,
@@ -161,7 +170,8 @@ def run_workload(native, templates, workload):
 def run_in_subprocess(args, workload):
     command = [sys.executable, __file__, "--child", workload]
     command += ["--native", args.native, "--templates", *args.templates]
-    out = subprocess.run(command, capture_output=True, text=True)
+    env = dict(os.environ, NEUROBOROS_VORONOI_KERNEL=str(int(args.kernel == "on")))
+    out = subprocess.run(command, capture_output=True, text=True, env=env)
     lines = [line for line in out.stdout.splitlines() if line.startswith(MARKER)]
     if out.returncode or not lines:
         raise RuntimeError(f"Workload {workload} failed:\n{out.stdout}\n{out.stderr}")
@@ -192,6 +202,7 @@ def main():
     parser.add_argument("--native", default="onavg-ico32", choices=list(TEMPLATES))
     parser.add_argument("--templates", nargs=3, help="Three spaces, coarse to fine.")
     parser.add_argument("--workloads", nargs="+", help="Default: all.")
+    parser.add_argument("--kernel", default="on", choices=["on", "off"])
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--note", default="", help="Stored with the record.")
@@ -233,6 +244,7 @@ def main():
             source=source,
             date=datetime.date.today().isoformat(),
             note=args.note,
+            kernel=all(result["kernel"] for result in results.values()),
             environment=vg.environment(),
             native=args.native,
             templates=args.templates,
