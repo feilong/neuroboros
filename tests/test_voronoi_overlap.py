@@ -73,6 +73,26 @@ def test_constructor_copies_inputs(mesh):
         np.testing.assert_array_equal(x, y)
 
 
+def test_surface_is_read_only(mesh):
+    surface = VoronoiSurface(*mesh)
+    assert repr(surface) == "<VoronoiSurface with 30 vertices and 56 faces>"
+    assert (surface.edge_divisions, surface.sample_divisions) == (8, 32)
+    names = ["coords", "faces", "sphere", "face_areas"]
+    for name in names + ["edge_divisions", "sample_divisions", "native"]:
+        with pytest.raises(AttributeError):
+            setattr(surface, name, getattr(surface, name))
+    for name in names:
+        with pytest.raises(ValueError, match="read-only"):
+            getattr(surface, name)[0] = 0
+    assert VoronoiSurface(*mesh[:2]).sphere is None
+    # So are the arrays of a partition.
+    partition = surface.partition(mesh[2][:3])
+    for point_set in (surface.native._point_set, partition._point_set):
+        for value in vars(point_set).values():
+            assert isinstance(value, int) or not value.flags.writeable
+    partition.overlap(surface.native)
+
+
 @pytest.mark.parametrize("name", ["coords", "sphere"])
 @pytest.mark.parametrize("value", [np.nan, np.inf])
 def test_constructor_rejects_non_finite(mesh, name, value):
@@ -609,12 +629,25 @@ def test_unreachable_faces(mesh):
         np.concatenate([faces, faces + len(coords)]),
     )
     native = surface.native
-    points = surface.partition(face_indices=[0], weights=[[1, 0, 0]])
-    native.overlap(native)
+    np.testing.assert_allclose(native.areas().sum(), surface.face_areas.sum())
+    # A partition needs a point in each connected part.
+    weights = [[1, 0, 0]]
     with pytest.raises(ValueError, match="cannot be reached"):
-        native.overlap(points)
-    with pytest.raises(ValueError, match="cannot be reached"):
-        points.areas()
+        surface.partition(face_indices=[0], weights=weights)
+    both = surface.partition(face_indices=[0, len(faces)], weights=weights * 2)
+    np.testing.assert_allclose(both.areas(), surface.face_areas.sum() / 2)
+
+
+def test_vertex_without_face(mesh):
+    """A vertex that no face uses has an empty cell."""
+    coords, faces, _ = mesh
+    surface = VoronoiSurface(np.concatenate([coords, [[5.0, 5.0, 5.0]]]), faces)
+    expected = VoronoiSurface(coords, faces)
+    areas = surface.native.areas()
+    np.testing.assert_array_equal(areas[:-1], expected.native.areas())
+    assert areas[-1] == 0
+    partition = surface.partition(face_indices=[0, 3], weights=np.full((2, 3), 1 / 3))
+    assert partition.overlap(surface.native).shape == (2, len(coords) + 1)
 
 
 def test_native_partition(mesh):

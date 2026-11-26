@@ -573,6 +573,10 @@ class VoronoiSurface:
     in one pass over the faces, which is faster than one call of ``overlap``
     for each.
 
+    The surface does not change after it is created: its attributes and
+    their arrays are read-only. Another mesh or resolution needs a new
+    object.
+
     Parameters
     ----------
     coords : ndarray of shape (nv, 3)
@@ -621,12 +625,15 @@ class VoronoiSurface:
             if not isinstance(value, (int, np.integer)) or value < 1:
                 raise ValueError(f"{name} must be a positive integer, not {value!r}.")
 
-        self.coords = coords
-        self.faces = faces
-        self.sphere = sphere
-        self.edge_divisions = int(edge_divisions)
-        self.sample_divisions = int(sample_divisions)
-        self.face_areas = compute_face_areas(coords, faces)
+        self._coords = coords
+        self._faces = faces
+        self._sphere = sphere
+        self._edge_divisions = int(edge_divisions)
+        self._sample_divisions = int(sample_divisions)
+        self._face_areas = compute_face_areas(coords, faces)
+        for array in (self._coords, self._faces, self._sphere, self._face_areas):
+            if array is not None:
+                array.flags.writeable = False
         # Barycentric sample coordinates.
         self._ww = _split_triangle(self.sample_divisions)
 
@@ -639,6 +646,42 @@ class VoronoiSurface:
         self._native = None
         self._native_partition = None
         self._placement = None
+
+    def __repr__(self):
+        return (
+            f"<VoronoiSurface with {len(self.coords)} vertices and "
+            f"{len(self.faces)} faces>"
+        )
+
+    @property
+    def coords(self):
+        """The coordinates of the vertices, of shape (nv, 3), as float64."""
+        return self._coords
+
+    @property
+    def faces(self):
+        """The vertex indices of each face, of shape (nf, 3)."""
+        return self._faces
+
+    @property
+    def sphere(self):
+        """The coordinates of the vertices on the registered sphere, or None."""
+        return self._sphere
+
+    @property
+    def face_areas(self):
+        """The area of each face, of shape (nf,)."""
+        return self._face_areas
+
+    @property
+    def edge_divisions(self):
+        """The number of segments that each edge is divided into."""
+        return self._edge_divisions
+
+    @property
+    def sample_divisions(self):
+        """Each face is sampled with ``sample_divisions**2`` points."""
+        return self._sample_divisions
 
     @property
     def native(self):
@@ -663,8 +706,9 @@ class VoronoiSurface:
         Give either the coordinates of the points on the unit sphere (placed
         on ``sphere`` with ``Sphere.barycentric``), or the face that contains
         each point and its barycentric weights. Any number of points can be
-        in the same face. The graph nodes are labelled with the points here,
-        with one shortest-path search.
+        in the same face, but every connected part of the mesh needs at least
+        one point. The graph nodes are labelled with the points here, with
+        one shortest-path search.
 
         Parameters
         ----------
@@ -714,7 +758,13 @@ class VoronoiSurface:
         ):
             raise ValueError("face_indices contain face indices out of range.")
         f_indices = f_indices.astype(np.intp, copy=False)
-        return VoronoiPartition(self, self._label_points(f_indices, weights))
+        point_set = self._label_points(f_indices, weights)
+        if point_set.nn[self._face_nodes].min(initial=0) < 0:
+            raise ValueError(
+                "Some faces cannot be reached from any point. Each connected "
+                "part of the mesh needs at least one point."
+            )
+        return VoronoiPartition(self, point_set)
 
     def overlaps(self, pairs):
         """Overlap areas for several pairs of partitions.
@@ -972,11 +1022,6 @@ class VoronoiSurface:
         points in index order.
         """
         boundary_labels = point_set.nn[self._face_nodes]
-        if np.any(boundary_labels < 0):
-            raise ValueError(
-                "Some faces cannot be reached from any point. Each connected "
-                "part of the mesh needs at least one point."
-            )
         is_single = np.all(boundary_labels == boundary_labels[:, :1], axis=1)
         is_single &= np.diff(point_set.inside_ptr) == 0
         return np.where(is_single, boundary_labels[:, 0], -1).astype(np.int32)
@@ -1118,6 +1163,12 @@ class _PointSet:
     inside_ptr: np.ndarray
     inside_labels: np.ndarray
     inside_coords: np.ndarray
+
+    def __post_init__(self):
+        # A partition does not change.
+        for value in vars(self).values():
+            if isinstance(value, np.ndarray):
+                value.flags.writeable = False
 
 
 def _finite_copy(x, name):
