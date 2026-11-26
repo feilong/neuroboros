@@ -84,9 +84,12 @@ typedef struct {
     const double *nnd;           /* (n_partitions, n_nodes) */
     const int32_t *nn;           /* (n_partitions, n_nodes) */
     const int32_t *single;       /* (n_partitions, n_mesh_faces) */
+    const Py_ssize_t *inside_ptr;/* (n_partitions, n_mesh_faces + 1) */
+    const double *inside_coords; /* (n_inside, 3) */
+    const int32_t *inside_labels;/* (n_inside,) */
     int32_t *out;                /* (n_partitions, n_faces, n_samples) */
     Py_ssize_t n_samples, n_vertices, n_mesh_faces, n_nodes, n_boundary;
-    Py_ssize_t n_faces, n_partitions;
+    Py_ssize_t n_faces, n_partitions, n_inside;
 } LabelArgs;
 
 /* Label the samples of the faces. Return 0, 1 if out of memory, or 2 if an
@@ -124,6 +127,12 @@ label_samples_loop(const LabelArgs *a)
             const int32_t label = a->single[p * a->n_mesh_faces + face];
 
             if (label < 0) {
+                const Py_ssize_t *ptr =
+                    a->inside_ptr + p * (a->n_mesh_faces + 1) + face;
+
+                if (ptr[0] < 0 || ptr[0] > ptr[1] || ptr[1] > a->n_inside) {
+                    goto out_of_range;
+                }
                 any_mixed = 1;
                 continue;
             }
@@ -176,8 +185,11 @@ label_samples_loop(const LabelArgs *a)
             }
             for (p = 0; p < n_partitions; p++) {
                 const double *pd = node_dists + p * n_boundary;
+                const Py_ssize_t *ptr =
+                    a->inside_ptr + p * (a->n_mesh_faces + 1) + face;
                 double best_score;
-                Py_ssize_t best = 0;
+                Py_ssize_t best = 0, q;
+                int32_t label;
 
                 if (a->single[p * a->n_mesh_faces + face] >= 0) {
                     continue;
@@ -193,8 +205,31 @@ label_samples_loop(const LabelArgs *a)
                         best = j;
                     }
                 }
-                a->out[(p * a->n_faces + f) * n_samples + s] =
-                    node_labels[p * n_boundary + best];
+                label = node_labels[p * n_boundary + best];
+
+                if (ptr[0] < ptr[1]) {
+                    /* The nearest point inside the face, and the first of
+                     * them if several are as near. It wins only if it is
+                     * nearer than the score of the best boundary node. */
+                    double nearest_dist = 0.0;
+                    Py_ssize_t nearest = ptr[0];
+
+                    for (q = ptr[0]; q < ptr[1]; q++) {
+                        const double *point = a->inside_coords + 3 * q;
+                        const double dx = x - point[0], dy = y - point[1];
+                        const double dz = z - point[2];
+                        const double d = sqrt(dx * dx + dy * dy + dz * dz);
+
+                        if (q == ptr[0] || d < nearest_dist) {
+                            nearest_dist = d;
+                            nearest = q;
+                        }
+                    }
+                    if (nearest_dist < best_score) {
+                        label = a->inside_labels[nearest];
+                    }
+                }
+                a->out[(p * a->n_faces + f) * n_samples + s] = label;
             }
         }
     }
@@ -210,43 +245,54 @@ out_of_range:
 
 PyDoc_STRVAR(label_samples_doc,
 "label_samples(ww, coords, faces, node_coords, face_nodes, face_indices,\n"
-"              nnd, nn, single, out)\n--\n\n"
+"              nnd, nn, single, inside_ptr, inside_coords, inside_labels,\n"
+"              out)\n--\n\n"
 "Label the samples of some faces for several partitions.\n\n"
 "``out[p, i, s]`` becomes the label of sample ``s`` of face\n"
-"``face_indices[i]`` in partition ``p``: ``single[p, face]`` if it is not\n"
-"negative, and otherwise the label ``nn[p, node]`` of the boundary node of\n"
-"the face with the lowest ``nnd[p, node]`` plus distance to the sample. The\n"
-"first boundary node wins a tie. The distances from a sample to the\n"
-"boundary nodes are computed once for all partitions.\n\n"
-"The integer arrays have 32-bit elements, except ``faces``, ``face_nodes``\n"
-"and ``face_indices``, which have the size of a pointer. The other arrays\n"
-"are float64. All arrays are C-contiguous. The shapes are: ``ww``\n"
-"(n_samples, 3); ``coords`` (nv, 3); ``faces`` (nf, 3); ``node_coords``\n"
-"(n_nodes, 3); ``face_nodes`` (nf, n_boundary); ``face_indices`` (k,);\n"
-"``nnd`` and ``nn`` (n_partitions, n_nodes); ``single`` (n_partitions, nf);\n"
-"``out`` (n_partitions, k, n_samples).");
+"``face_indices[i]`` in partition ``p``. It is ``single[p, face]`` if that\n"
+"is not negative. Otherwise it is the label ``nn[p, node]`` of the boundary\n"
+"node of the face with the lowest score, ``nnd[p, node]`` plus the distance\n"
+"to the sample; the first boundary node wins a tie. The points of the\n"
+"partition inside the face are ``inside_ptr[p, face]`` to\n"
+"``inside_ptr[p, face + 1]`` of ``inside_coords`` and ``inside_labels``.\n"
+"If the nearest of them, the first on a tie, is nearer to the sample than\n"
+"that lowest score, the sample takes its label instead. The distances\n"
+"from a sample to the boundary nodes are computed once for all partitions.\n\n"
+"The integer arrays have 32-bit elements, except ``faces``, ``face_nodes``,\n"
+"``face_indices`` and ``inside_ptr``, which have the size of a pointer. The\n"
+"other arrays are float64. All arrays are C-contiguous. The shapes are:\n"
+"``ww`` (n_samples, 3); ``coords`` (nv, 3); ``faces`` (nf, 3);\n"
+"``node_coords`` (n_nodes, 3); ``face_nodes`` (nf, n_boundary);\n"
+"``face_indices`` (k,); ``nnd`` and ``nn`` (n_partitions, n_nodes);\n"
+"``single`` (n_partitions, nf); ``inside_ptr`` (n_partitions, nf + 1);\n"
+"``inside_coords`` (n_inside, 3); ``inside_labels`` (n_inside,); ``out``\n"
+"(n_partitions, k, n_samples).");
 
-#define N_LABEL_ARRAYS 10
+#define N_LABEL_ARRAYS 13
 
 static PyObject *
 label_samples(PyObject *self, PyObject *args)
 {
     static const char *names[N_LABEL_ARRAYS] = {
         "ww", "coords", "faces", "node_coords", "face_nodes", "face_indices",
-        "nnd", "nn", "single", "out"};
-    static const char kinds[N_LABEL_ARRAYS + 1] = "ffifiifiii";
-    static const int ndims[N_LABEL_ARRAYS] = {2, 2, 2, 2, 2, 1, 2, 2, 2, 3};
+        "nnd", "nn", "single", "inside_ptr", "inside_coords", "inside_labels",
+        "out"};
+    static const char kinds[N_LABEL_ARRAYS + 1] = "ffifiifiiifii";
+    static const int ndims[N_LABEL_ARRAYS] = {
+        2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 3};
     /* The element sizes; 0 stands for the size of a pointer. */
-    static const int sizes[N_LABEL_ARRAYS] = {8, 8, 0, 8, 0, 0, 8, 4, 4, 4};
+    static const int sizes[N_LABEL_ARRAYS] = {
+        8, 8, 0, 8, 0, 0, 8, 4, 4, 0, 8, 4, 4};
     PyObject *objects[N_LABEL_ARRAYS];
     Py_buffer views[N_LABEL_ARRAYS];
     Py_ssize_t *shapes[N_LABEL_ARRAYS];
     LabelArgs a;
     int i, n_views = 0, status = 0;
 
-    if (!PyArg_ParseTuple(args, "OOOOOOOOOO", &objects[0], &objects[1],
+    if (!PyArg_ParseTuple(args, "OOOOOOOOOOOOO", &objects[0], &objects[1],
                           &objects[2], &objects[3], &objects[4], &objects[5],
-                          &objects[6], &objects[7], &objects[8], &objects[9])) {
+                          &objects[6], &objects[7], &objects[8], &objects[9],
+                          &objects[10], &objects[11], &objects[12])) {
         return NULL;
     }
     for (i = 0; i < N_LABEL_ARRAYS; i++) {
@@ -269,7 +315,10 @@ label_samples(PyObject *self, PyObject *args)
     a.nnd = views[6].buf;
     a.nn = views[7].buf;
     a.single = views[8].buf;
-    a.out = views[9].buf;
+    a.inside_ptr = views[9].buf;
+    a.inside_coords = views[10].buf;
+    a.inside_labels = views[11].buf;
+    a.out = views[12].buf;
     a.n_samples = shapes[0][0];
     a.n_vertices = shapes[1][0];
     a.n_mesh_faces = shapes[2][0];
@@ -277,14 +326,18 @@ label_samples(PyObject *self, PyObject *args)
     a.n_boundary = shapes[4][1];
     a.n_faces = shapes[5][0];
     a.n_partitions = shapes[6][0];
+    a.n_inside = shapes[10][0];
     if (shapes[0][1] != 3 || shapes[1][1] != 3 || shapes[2][1] != 3
             || shapes[3][1] != 3 || shapes[4][0] != a.n_mesh_faces
             || a.n_boundary < 1 || shapes[6][1] != a.n_nodes
             || shapes[7][0] != a.n_partitions || shapes[7][1] != a.n_nodes
             || shapes[8][0] != a.n_partitions
             || shapes[8][1] != a.n_mesh_faces
-            || shapes[9][0] != a.n_partitions || shapes[9][1] != a.n_faces
-            || shapes[9][2] != a.n_samples) {
+            || shapes[9][0] != a.n_partitions
+            || shapes[9][1] != a.n_mesh_faces + 1 || shapes[10][1] != 3
+            || shapes[11][0] != a.n_inside
+            || shapes[12][0] != a.n_partitions || shapes[12][1] != a.n_faces
+            || shapes[12][2] != a.n_samples) {
         PyErr_SetString(PyExc_ValueError,
                         "The shapes of the arrays do not match.");
         goto fail;
@@ -299,7 +352,7 @@ label_samples(PyObject *self, PyObject *args)
     }
     if (status == 2) {
         PyErr_SetString(PyExc_IndexError,
-                        "A face, vertex or node index is out of range.");
+                        "A face, vertex, node or point index is out of range.");
         goto fail;
     }
     for (i = 0; i < n_views; i++) {

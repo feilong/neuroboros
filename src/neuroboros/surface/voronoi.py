@@ -929,10 +929,21 @@ class VoronoiSurface:
         ``single`` has the output of ``_single_labels`` for each partition.
         """
         point_sets = [partition._point_set for partition in partitions]
+        # The inside points of all partitions, one partition after another.
+        counts = [len(point_set.inside_labels) for point_set in point_sets]
+        offsets = np.cumsum([0] + counts[:-1])
         return (
             np.stack([point_set.nnd for point_set in point_sets]),
             np.stack([point_set.nn for point_set in point_sets]),
             np.stack([single[partition] for partition in partitions]),
+            np.stack(
+                [
+                    (point_set.inside_ptr + offset).astype(np.intp, copy=False)
+                    for point_set, offset in zip(point_sets, offsets)
+                ]
+            ),
+            np.concatenate([point_set.inside_coords for point_set in point_sets]),
+            np.concatenate([point_set.inside_labels for point_set in point_sets]),
         )
 
     def _face_labels(self, point_set, single, face_indices, samples, distances):

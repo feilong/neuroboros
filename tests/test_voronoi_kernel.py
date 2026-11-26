@@ -104,12 +104,6 @@ def _numpy_labels(surface, partitions, face_indices):
     )
 
 
-def _without_inside_points(surface, partitions):
-    """The faces in which no partition has a point."""
-    counts = sum(np.diff(p._point_set.inside_ptr) for p in partitions)
-    return np.flatnonzero(counts == 0)
-
-
 @pytest.mark.parametrize("n_div", [1, 2, 8])
 @pytest.mark.parametrize("t_div", [1, 2, 8])
 def test_label_samples(mesh, n_div, t_div):
@@ -118,17 +112,20 @@ def test_label_samples(mesh, n_div, t_div):
         surface.native,
         _random_partition(surface, 3),
         _random_partition(surface, 10),
+        _random_partition(surface, 200),
         surface.native,
     ]
-    faces = _without_inside_points(surface, partitions)
-    assert len(faces) > len(surface.faces) // 2
+    faces = np.arange(len(surface.faces))
     expected = _numpy_labels(surface, partitions, faces)
     labels = _kernel_labels(surface, partitions, faces)
-    assert labels.shape == (4, len(faces), t_div**2)
+    assert labels.shape == (5, len(faces), t_div**2)
     np.testing.assert_array_equal(labels, expected)
-    # Mixed and single faces of the same partition are both covered.
-    single = surface._single_labels(partitions[1]._point_set)[faces]
+    # Mixed and single faces of the same partition are both covered, and
+    # faces with no, one and several points inside.
+    single = surface._single_labels(partitions[1]._point_set)
     assert 0 < np.count_nonzero(single < 0) < len(faces)
+    assert {0, 1} <= set(np.diff(partitions[2]._point_set.inside_ptr))
+    assert np.diff(partitions[3]._point_set.inside_ptr).max() > 2
 
     # A partition has the same labels alone, and so does any choice of faces.
     for i, partition in enumerate(partitions):
@@ -144,19 +141,56 @@ def test_label_samples(mesh, n_div, t_div):
 @pytest.mark.parametrize("n_div", [1, 2, 4])
 @pytest.mark.parametrize("t_div", [2, 4, 8])
 def test_label_samples_ties(square, n_div, t_div):
-    """Samples that are as far from two boundary nodes take the first."""
+    """Samples that are as far from two candidates take the first."""
     surface = VoronoiSurface(*square, edge_divisions=n_div, sample_divisions=t_div)
+    # Points at vertices 1 and 2 of both faces, twice at the center of the
+    # square, and a pair of points mirrored across the diagonal in face 0.
+    f_indices = np.array([0, 1, 0, 1, 0, 0, 0, 0])
+    weights = np.array(
+        [
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0.5, 0.5],
+            [0.4, 0.4, 0.2],
+            [0.4, 0.2, 0.4],
+            [0, 0.5, 0.5],
+        ]
+    )
+    points = surface.partition(face_indices=f_indices, weights=weights)
+    partitions = [surface.native, points]
     faces = np.arange(2)
-    expected = _numpy_labels(surface, [surface.native], faces)
-    labels = _kernel_labels(surface, [surface.native], faces)
-    np.testing.assert_array_equal(labels, expected)
+    expected = _numpy_labels(surface, partitions, faces)
+    np.testing.assert_array_equal(_kernel_labels(surface, partitions, faces), expected)
+    # Of the two points at the center, the second one has no sample.
+    assert 7 not in expected[1]
+    if t_div > 2:
+        assert 4 in expected[1]
+
+
+def test_label_samples_many_inside(mesh):
+    """One face with more points inside than samples, and one with a point."""
+    surface = VoronoiSurface(*mesh, sample_divisions=4)
+    rng = np.random.default_rng(0)
+    f_indices = np.concatenate([np.full(300, 3), [7]])
+    weights = rng.dirichlet(np.ones(3), len(f_indices))
+    partition = surface.partition(face_indices=f_indices, weights=weights)
+    faces = np.arange(len(surface.faces))
+    expected = _numpy_labels(surface, [partition], faces)
+    np.testing.assert_array_equal(_kernel_labels(surface, [partition], faces), expected)
+    assert len(np.unique(expected[0, 3])) > 10
 
 
 def test_label_samples_onavg():
-    """Every face of a real mesh."""
+    """Every face of a real mesh, with its own vertices and two templates."""
     coords, faces = nb.geometry("midthickness", "l", "onavg-ico32")
-    surface = VoronoiSurface(coords, faces)
+    sphere = nb.geometry("sphere.reg", "l", "onavg-ico32", vertices_only=True)
+    surface = VoronoiSurface(coords, faces, sphere)
     partitions = [surface.native]
+    for space in ("onavg-ico8", "onavg-ico32"):
+        points = nb.geometry("sphere.reg", "l", space, vertices_only=True)
+        partitions.append(surface.partition(points))
     for start in range(0, len(faces), 2048):
         chunk = np.arange(start, min(start + 2048, len(faces)))
         np.testing.assert_array_equal(
@@ -173,7 +207,8 @@ def test_label_samples_rejects_invalid(mesh):
     kernel = pytest.importorskip(MODULE)
     surface = VoronoiSurface(*mesh, sample_divisions=2)
     faces = np.arange(4)
-    args = _kernel_arguments(surface, [surface.native], faces)
+    partitions = [surface.native, _random_partition(surface, 10)]
+    args = _kernel_arguments(surface, partitions, faces)
     kernel.label_samples(*args)
     expected = args[-1].copy()
 
@@ -192,21 +227,27 @@ def test_label_samples_rejects_invalid(mesh):
                 kernel.label_samples(*_replace(args, index, array.T))
         if index != 5:
             # One row less for the arrays whose last axis has no fixed size.
-            smaller = array[:-1] if index in (2, 3, 4) else array[..., :-1]
+            smaller = array[:-1] if index in (2, 3, 4, 11) else array[..., :-1]
             with pytest.raises(ValueError, match="shapes"):
                 kernel.label_samples(*_replace(args, index, smaller.copy()))
     read_only = args[-1].copy()
     read_only.flags.writeable = False
     with pytest.raises((BufferError, ValueError), match="read-only|writable"):
-        kernel.label_samples(*_replace(args, 9, read_only))
+        kernel.label_samples(*_replace(args, 12, read_only))
 
     n_faces, n_nodes = len(surface.faces), len(surface._node_coords)
+    inside_ptr = args[9]
+    decreasing = inside_ptr.copy()
+    decreasing[1, 1:3] = [5, 3]
     out_of_range = [
         (5, np.array([0, n_faces, 1, 2])),
         (5, np.array([0, -1, 1, 2])),
         (2, np.full_like(surface.faces, len(surface.coords))),
         (4, np.full_like(surface._face_nodes, n_nodes)),
         (4, np.full_like(surface._face_nodes, -1)),
+        (9, inside_ptr + 100),
+        (9, inside_ptr - 1),
+        (9, decreasing),
     ]
     for index, array in out_of_range:
         with pytest.raises(IndexError, match="out of range"):
